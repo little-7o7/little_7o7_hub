@@ -35,7 +35,7 @@ const (
 	FilesDay     = 30 * time.Minute
 	FilesNight   = 3 * time.Hour
 	filesCheck   = 5 * time.Minute
-	FlagEvery    = 2 * time.Minute
+	FlagEvery    = time.Minute
 	UpdateEvery  = 6 * time.Hour
 	StatusEvery  = 3 * time.Hour
 	retryMissing = 30 * time.Minute
@@ -74,6 +74,16 @@ type App struct {
 	filesBusy bool
 	filesTry  time.Time
 	filesStep string
+	stepAt    time.Time
+	stepSent  time.Time
+
+	// Флаги изменений проектов (now.go): что смотреть и при каком значении проект разложен.
+	watch   map[string]*projWatch
+	usage   map[string]hub.Usage
+	usageAt time.Time
+	// «Сохранить сейчас на всех» из хаба: последняя виденная просьба (как updSeen).
+	syncSeen   string
+	syncSeenOK bool
 
 	// Обновление: updBusy — идёт проверка или установка; updSeen — просьба «Обновить программу» из хаба, которую уже
 	// видели (пусто — флаг ещё не читали: старая просьба до запуска программы не в счёт).
@@ -321,40 +331,61 @@ func FilesDue(last, now time.Time) bool {
 // SyncFiles — файлы всех проектов на активный диск: Excel, папки клиентов, поставщиков, мастеров, товаров с фото, и
 // копия базы проекта. Уже идёт — ничего.
 func (a *App) SyncFiles(ctx context.Context) error {
+	_, err := a.runFiles(ctx, "", false)
+	return err
+}
+
+// runFiles — раскладка всех проектов (only == "") или одного; force — проверить всё заново. Уже идёт — ran=false.
+func (a *App) runFiles(ctx context.Context, only string, force bool) (ran bool, err error) {
 	a.mu.Lock()
 	if a.filesBusy {
 		a.mu.Unlock()
-		return nil
+		return false, nil
 	}
-	a.filesBusy, a.filesTry = true, a.now()
+	a.filesBusy = true
+	if only == "" {
+		a.filesTry = a.now()
+	}
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
 		a.filesBusy, a.filesStep = false, ""
 		a.mu.Unlock()
 	}()
-	err := a.syncFiles(ctx)
+	err = a.syncFiles(ctx, only, force)
 	if err != nil {
 		a.Logf(true, "Файлы проектов: %v", err)
 	}
-	return err
+	return true, err
 }
 
+// step — что программа делает сейчас: в окно и, не чаще раза в 20 секунд, хабу (пункт 88). "" — закончила.
 func (a *App) step(s string) {
+	now := a.now()
 	a.mu.Lock()
-	a.filesStep = s
+	a.filesStep, a.stepAt = s, now
+	send := s != "" && now.Sub(a.stepSent) >= StepEvery
+	if send {
+		a.stepSent = now
+	}
 	a.mu.Unlock()
+	if send {
+		sctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		a.SendStatus(sctx)
+		cancel()
+	}
 }
 
-func (a *App) syncFiles(ctx context.Context) error {
+func (a *App) syncFiles(ctx context.Context, only string, force bool) error {
 	c, err := a.client()
 	if err != nil {
 		return err
 	}
-	list, err := c.Projects(ctx)
+	list, err := c.Projects(ctx, only)
 	if err != nil {
 		return err
 	}
+	marks := a.learn(list)
 	cfg := a.Cfg.Get()
 	_, active, err := disks.Check(cfg.Disks, a.Space)
 	if err != nil {
@@ -370,6 +401,7 @@ func (a *App) syncFiles(ctx context.Context) error {
 		}
 	}
 	var stop error
+	full := only == ""
 	for _, p := range list {
 		if stop != nil || !files.SlugRe.MatchString(p.Slug) || !files.Ok(p.Folder) {
 			continue
@@ -392,13 +424,22 @@ func (a *App) syncFiles(ctx context.Context) error {
 			if b.Root {
 				bdir = dir // один «бизнес» у проекта (Strassio) — прямо в его папке
 			}
-			if err := files.Business(ctx, src, b, bdir, today, res, a.step); err != nil {
+			if err := files.Business(ctx, src, b, bdir, today, force, res, a.step); err != nil {
 				stop = err
 				break
 			}
 		}
+		fresh := true
 		if stop == nil && p.Copy {
-			stop = a.projectCopy(ctx, src, p, root, res)
+			fresh, stop = a.projectCopy(ctx, src, p, root, res)
+		}
+		if stop == nil && p.Copy && full {
+			stop = a.catchUpProject(ctx, src, p, root, res)
+		}
+		if stop == nil {
+			// Разложен при том флаге, что был на начале раскладки: запись во время неё — ещё раз. Копия «за сегодня»
+			// старше записей (проект отдал выгрузку прошлой минуты) — тоже ещё раз.
+			a.synced(p.Slug, marks[p.Slug], fresh)
 		}
 		state.Projects[p.Slug] = config.ProjectFiles{Businesses: res.Businesses, Files: res.Files, Items: res.Items, Photos: res.Photos, Locked: res.Locked, Errors: res.Errors}
 		if res.Files+res.Photos > 0 || len(res.Errors) > 0 {
@@ -408,6 +449,12 @@ func (a *App) syncFiles(ctx context.Context) error {
 	if err := a.Cfg.Update(func(x *config.Config) { x.Files = state }); err != nil {
 		return err
 	}
+	if stop == nil && full {
+		a.catchUpHub(ctx, c, root)
+		a.prune(root, list)
+		a.measure(root, list)
+	}
+	a.step("")
 	if stop == nil {
 		a.SendStatus(ctx)
 	}
@@ -428,8 +475,16 @@ func errNote(es []string) string {
 	return "; ошибки: " + strings.Join(es, "; ")
 }
 
-// projectCopy — копия базы проекта (Sarpo — ночная) в «<проект>/Копии базы/…» под паролем копий.
-func (a *App) projectCopy(ctx context.Context, src files.Source, p hub.FileProject, root string, res *files.Result) error {
+// projectCopy — копия базы проекта в «<проект>/Копии базы/…» под паролем копий: у проекта с копией «за сегодня»
+// (Sarpo с 2026-11-08) — она (liveCopy), иначе ночная. fresh=false — копия старше последних записей: попробовать ещё.
+func (a *App) projectCopy(ctx context.Context, src files.Source, p hub.FileProject, root string, res *files.Result) (fresh bool, err error) {
+	if p.Live {
+		return a.liveCopy(ctx, src, p, root, res)
+	}
+	return true, a.nightCopy(ctx, src, p, root, res)
+}
+
+func (a *App) nightCopy(ctx context.Context, src files.Source, p hub.FileProject, root string, res *files.Result) error {
 	proj := days.Project{Slug: p.Slug, Folder: p.Folder, Ext: "l7copy"}
 	cfg := a.Cfg.Get()
 	prev := cfg.Copies[p.Slug]
@@ -500,6 +555,19 @@ func (a *App) Status() hub.Status {
 	if cfg.Files != nil {
 		st2.Files = cfg.Files
 	}
+	for _, d := range st {
+		if d.Active {
+			st2.Days = a.copyDays(disks.Root(d.Path))
+		}
+	}
+	a.mu.Lock()
+	if a.filesBusy && a.filesStep != "" {
+		st2.Work = &hub.Work{Step: truncRunes(a.filesStep, 200), At: a.stepAt.UTC().Format(time.RFC3339)}
+	}
+	if len(a.usage) > 0 {
+		st2.Usage = a.usage
+	}
+	a.mu.Unlock()
 	return st2
 }
 
@@ -671,7 +739,7 @@ func (a *App) seeUpdateAsk(u string) bool {
 	return ask
 }
 
-// tick — раз в 2 минуты: флаг хаба, и если пора — копия.
+// tick — раз в минуту: флаг хаба, и если пора — копия (30 секунд затишья, не позже 3 минут).
 func (a *App) tick(ctx context.Context) {
 	if !a.Paired() {
 		return
@@ -699,9 +767,17 @@ func (a *App) tick(ctx context.Context) {
 		a.Logf(false, "Хаб попросил обновить программу")
 		a.UpdateNow()
 	}
+	if a.seeSyncAsk(f.S) {
+		a.Logf(false, "Хаб попросил сохранить всё сейчас")
+		go a.SaveAllNow(context.WithoutCancel(ctx))
+	}
 	v := f.V
+	a.localChanged(v)
 	a.mu.Lock()
 	a.flag = v
+	if a.deb.Quiet == 0 {
+		a.deb.Quiet, a.deb.Max = ChangeQuiet, ChangeMax
+	}
 	due := a.deb.Observe(v, copied, now)
 	a.mu.Unlock()
 	if due || missing {
@@ -712,7 +788,7 @@ func (a *App) tick(ctx context.Context) {
 }
 
 // Run — работа до выхода: копия при запуске (владелец: «pri vklyuchenii kompyutera, doljen vzyat posledniye
-// izmeneniya»), флаг раз в 2 минуты, курсы раз в 3 часа, обновление раз в 6 часов.
+// izmeneniya»), флаг хаба раз в минуту, флаги проектов раз в 30 секунд, курсы раз в 3 часа, обновление раз в 6 часов.
 func (a *App) Run(ctx context.Context) {
 	a.Kick()
 	flagT := time.NewTicker(FlagEvery)
@@ -725,6 +801,8 @@ func (a *App) Run(ctx context.Context) {
 	defer statT.Stop()
 	filesT := time.NewTicker(filesCheck)
 	defer filesT.Stop()
+	projT := time.NewTicker(ProjectFlagEvery)
+	defer projT.Stop()
 	first := time.After(time.Minute)
 	a.mu.Lock()
 	if a.kick == nil {
@@ -749,6 +827,10 @@ func (a *App) Run(ctx context.Context) {
 			}
 		case <-flagT.C:
 			a.tick(ctx)
+		case <-projT.C:
+			if due := a.pollProjects(ctx); len(due) > 0 {
+				go a.syncDue(ctx, due)
+			}
 		case <-first:
 			if a.Paired() {
 				_ = a.SendRates(ctx)
@@ -910,4 +992,13 @@ func (a *App) SetLang(l string) error {
 		return errors.New("язык — ru или en")
 	}
 	return a.Cfg.Update(func(c *config.Config) { c.Lang = l })
+}
+
+// truncRunes — не длиннее n знаков (хаб принимает шаг до 200).
+func truncRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }

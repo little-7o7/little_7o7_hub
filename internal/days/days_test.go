@@ -81,3 +81,38 @@ func TestPutReplacesAndKeepsWhole(t *testing.T) {
 		t.Fatal("временный файл остался")
 	}
 }
+
+func TestListAndPrune(t *testing.T) {
+	root := t.TempDir()
+	p := Project{Slug: "sarpo", Folder: "Sarpo Business", Ext: "l7copy"}
+	for _, d := range []string{"2026-09-30", "2026-10-09", "2026-10-10", "2026-11-08"} {
+		rel, _ := Rel(p, d)
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755)
+		_ = os.WriteFile(filepath.Join(root, rel), []byte("x"), 0o644)
+	}
+	// Чужое — не трогаем: другой проект, свой файл человека, кривое имя.
+	_ = os.WriteFile(filepath.Join(root, "Sarpo Business", "Копии базы", "2026-10", "моё.txt"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "Sarpo Business", "Копии базы", "2026-10", "hub-2026-10-01.l7copy"), []byte("x"), 0o644)
+	if l := List(root, p); len(l) != 4 || l[0].Day != "2026-09-30" || l[3].Day != "2026-11-08" {
+		t.Fatal(l)
+	}
+	now := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+	if Since(now, 30) != "2026-10-09" {
+		t.Fatal(Since(now, 30))
+	}
+	if n := Prune(root, p, now, 30); n != 1 {
+		t.Fatal("удалено", n)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Sarpo Business", "Копии базы", "2026-09")); err == nil {
+		t.Fatal("пустой сентябрь остался")
+	}
+	if l := List(root, p); len(l) != 3 || l[0].Day != "2026-10-09" {
+		t.Fatal(l)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Sarpo Business", "Копии базы", "2026-10", "моё.txt")); err != nil {
+		t.Fatal("свой файл человека удалён")
+	}
+	if List(t.TempDir(), p) != nil {
+		t.Fatal("нет папки — пусто")
+	}
+}

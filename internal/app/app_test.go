@@ -44,6 +44,13 @@ type fakeHub struct {
 	ask    string
 	latest string
 	checks int
+	// sync — просьба «Сохранить сейчас на всех»; days — копии хаба прошедших дней; hdrs — заголовки ответа проекта по
+	// «что?запрос» (вместо обычных у копии Sarpo); only — какие проекты спросили (?only=).
+	sync  string
+	days  []string
+	hdrs  map[string]map[string]string
+	only  []string
+	dayed int
 }
 
 func (f *fakeHub) server(t *testing.T) *httptest.Server {
@@ -75,7 +82,7 @@ func (f *fakeHub) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /api/pc/flag/k", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]string{"v": f.version, "u": f.ask})
+		_ = json.NewEncoder(w).Encode(map[string]string{"v": f.version, "u": f.ask, "s": f.sync})
 	})
 	mux.HandleFunc("GET /api/pc/version", auth(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -90,9 +97,23 @@ func (f *fakeHub) server(t *testing.T) *httptest.Server {
 			w.WriteHeader(409)
 			return
 		}
-		f.copies++
+		day := f.day
+		if d := r.URL.Query().Get("day"); d != "" {
+			found := false
+			for _, x := range f.days {
+				found = found || x == d
+			}
+			if !found {
+				w.WriteHeader(404)
+				return
+			}
+			day = d
+			f.dayed++
+		} else {
+			f.copies++
+		}
 		s := sha256.Sum256(f.copy)
-		w.Header().Set("X-Copy-Day", f.day)
+		w.Header().Set("X-Copy-Day", day)
 		w.Header().Set("X-Copy-Version", f.version)
 		w.Header().Set("X-Copy-Sha256", hex.EncodeToString(s[:]))
 		_, _ = w.Write(f.copy)
@@ -116,9 +137,19 @@ func (f *fakeHub) server(t *testing.T) *httptest.Server {
 		f.mu.Unlock()
 		_, _ = w.Write([]byte(`{"results":[{"source":"cbu","ok":true,"day":"2026-11-08"},{"source":"nbu","ok":false,"error":"далеко"}]}`))
 	}))
+	mux.HandleFunc("GET /api/pc/copies", auth(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		list := []hub.DayCopy{}
+		for _, d := range f.days {
+			list = append(list, hub.DayCopy{Day: d})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"copies": list})
+	}))
 	mux.HandleFunc("GET /api/pc/projects", auth(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		f.only = append(f.only, r.URL.Query().Get("only"))
 		_, _ = w.Write([]byte(f.projects))
 	}))
 	mux.HandleFunc("GET /api/pc/p/{slug}/{op}", auth(func(w http.ResponseWriter, r *http.Request) {
@@ -132,10 +163,13 @@ func (f *fakeHub) server(t *testing.T) *httptest.Server {
 			_, _ = w.Write([]byte(`{"error":"нет"}`))
 			return
 		}
-		if strings.HasPrefix(k, "sarpo/backup") {
+		if strings.HasPrefix(k, "sarpo/backup?") {
 			w.Header().Set("X-Copy-Name", "sarpo-2026-11-07.sql.gz")
 			w.Header().Set("X-Copy-Day", "2026-11-07")
 			w.Header().Set("X-Copy-Bytes", strconv.Itoa(len(a)))
+		}
+		for h, v := range f.hdrs[k] {
+			w.Header().Set(h, v)
 		}
 		_, _ = w.Write([]byte(a))
 	}))
@@ -437,7 +471,7 @@ func TestSyncFiles(t *testing.T) {
 	f.mu.Lock()
 	asked := append([]string(nil), f.asked...)
 	f.mu.Unlock()
-	if len(asked) != 1 || asked[0] != "sarpo/backup?have=sarpo-2026-11-07.sql.gz" {
+	if len(asked) != 2 || asked[0] != "sarpo/backup?have=sarpo-2026-11-07.sql.gz" || asked[1] != "sarpo/backups?" {
 		t.Fatalf("спрошено: %v", asked)
 	}
 }

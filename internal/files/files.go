@@ -253,13 +253,14 @@ func ReadVer(dir string) string {
 
 // Business — Excel, папки и фото одного бизнеса в dir. Версия не сменилась с прошлого раза (всё тогда записалось) —
 // ничего не спрашиваем. Ошибки ответов и диска — в res, дальше; нет связи или компьютер отключён — ошибка.
-func Business(ctx context.Context, src Source, b hub.Business, dir, today string, res *Result, progress func(string)) error {
+// force — «Сохранить сейчас на всех» (хаб): проверить всё заново, даже если версия та же (вдруг файл удалили руками).
+func Business(ctx context.Context, src Source, b hub.Business, dir, today string, force bool, res *Result, progress func(string)) error {
 	name := b.Name
 	if name == "" {
 		name = b.Slug
 	}
 	prev := ReadVer(dir)
-	if prev != "" && prev == b.Ver {
+	if !force && prev != "" && prev == b.Ver {
 		return nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -267,7 +268,7 @@ func Business(ctx context.Context, src Source, b hub.Business, dir, today string
 		return nil
 	}
 	before := res.failed + res.Locked
-	if err := Excel(ctx, src, b, dir, today, prev != b.Ver, res); err != nil {
+	if err := Excel(ctx, src, b, dir, today, force || prev != b.Ver, res); err != nil {
 		return err
 	}
 	var groups struct {

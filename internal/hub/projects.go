@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"runtime"
 	"strconv"
+	"strings"
+	"time"
 )
 
 // Файлы проектов (Excel, папки клиентов, поставщиков, мастеров, товаров с фото) и копии баз проектов: хаб спрашивает
@@ -55,6 +58,8 @@ type Business struct {
 }
 
 // FileProject — проект с файлами. OK=false — проект не подключён или не ответил: его папку не трогаем.
+// Flag — адрес флага изменений проекта (Sarpo: в CDN проекта, базу не будит); Live — у проекта есть копия базы «за
+// сегодня»; Local — файлы собирает хаб (Strassio): они меняются вместе с флагом хаба.
 type FileProject struct {
 	Slug       string     `json:"slug"`
 	Folder     string     `json:"folder"`
@@ -62,14 +67,24 @@ type FileProject struct {
 	OK         bool       `json:"ok"`
 	Error      string     `json:"error,omitempty"`
 	Businesses []Business `json:"businesses"`
+	Flag       string     `json:"flag,omitempty"`
+	Live       bool       `json:"live,omitempty"`
+	Local      bool       `json:"local,omitempty"`
 }
 
 var slugRe = regexp.MustCompile(`^[a-z0-9_-]{1,30}$`)
 var opRe = regexp.MustCompile(`^[a-z]{1,20}$`)
 
-// Projects — проекты с файлами и их бизнесы.
-func (c *Client) Projects(ctx context.Context) ([]FileProject, error) {
-	resp, err := c.do(ctx, "GET", "/api/pc/projects", nil, true)
+// Projects — проекты с файлами и их бизнесы; only — только этот проект (его флаг сменился).
+func (c *Client) Projects(ctx context.Context, only string) ([]FileProject, error) {
+	path := "/api/pc/projects"
+	if only != "" {
+		if !slugRe.MatchString(only) {
+			return nil, fmt.Errorf("неверный проект: %q", only)
+		}
+		path += "?only=" + only
+	}
+	resp, err := c.do(ctx, "GET", path, nil, true)
 	if err != nil {
 		return nil, err
 	}
@@ -169,4 +184,40 @@ func (c *Client) ProjectSave(ctx context.Context, slug, op string, q url.Values,
 		return Saved{}, &APIError{Status: 502, Msg: "файл больше " + strconv.FormatInt(max>>20, 10) + " МБ"}
 	}
 	return Saved{Type: resp.Header.Get("Content-Type"), Bytes: n, Header: resp.Header}, nil
+}
+
+// ProjectFlag — время из флага изменений проекта (мс): сменилось — в проекте что-то записали. Флаг лежит у проекта
+// (не у хаба), поэтому ключ компьютера туда не уходит: запрос без Authorization, только https (http — 127.0.0.1 для
+// проверок), без переадресаций.
+func (c *Client) ProjectFlag(ctx context.Context, raw string) (int64, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.User != nil || u.RawQuery != "" || !strings.HasPrefix(u.Path, "/api/pc-flag/") ||
+		!(u.Scheme == "https" || (u.Scheme == "http" && strings.HasPrefix(u.Host, "127.0.0.1:"))) {
+		return 0, fmt.Errorf("неверный адрес флага проекта: %q", raw)
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("User-Agent", fmt.Sprintf("LittleHub/%s (%s; %s)", c.Version, runtime.GOOS, runtime.GOARCH))
+	h := http.Client{Timeout: 30 * time.Second}
+	if c.HTTP != nil && c.HTTP.Transport != nil {
+		h.Transport = c.HTTP.Transport
+	}
+	h.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := h.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("флаг проекта не ответил: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, &APIError{Status: resp.StatusCode, Msg: "флаг проекта"}
+	}
+	var f struct {
+		T int64 `json:"t"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&f); err != nil || f.T <= 0 {
+		return 0, &APIError{Status: 502, Msg: "флаг проекта без времени"}
+	}
+	return f.T, nil
 }

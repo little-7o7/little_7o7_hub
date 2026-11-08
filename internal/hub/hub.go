@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -161,12 +162,13 @@ func (c *Client) Pair(ctx context.Context, code, name string) (Paired, error) {
 	return p, nil
 }
 
-// Flag — отпечаток данных хаба (из кэша CDN; меняется после каждой записи в хаб).
 // Flag — флаг хаба: V — отпечаток данных хаба (изменился — копия устарела), U — номер просьбы «Обновить программу»
 // из Настроек → «Компьютеры» (изменился — проверить обновление сейчас; у хаба старше — пусто).
+// S — номер просьбы «Сохранить сейчас на всех» (с хабом 2026-11-08; изменился — разложить всё заново сейчас).
 type Flag struct {
 	V string `json:"v"`
 	U string `json:"u"`
+	S string `json:"s"`
 }
 
 func (c *Client) Flag(ctx context.Context, path string) (Flag, error) {
@@ -193,14 +195,49 @@ type Copy struct {
 }
 
 // HubCopy — скачать копию базы хаба. Пришла не целой (SHA-256 не сходится) — ошибка.
-func (c *Client) HubCopy(ctx context.Context) (Copy, error) {
-	resp, err := c.do(ctx, "GET", "/api/pc/copy", nil, true)
+func (c *Client) HubCopy(ctx context.Context) (Copy, error) { return c.hubCopy(ctx, "/api/pc/copy") }
+
+// HubCopyDay — копия хаба за прошедший день (хаб хранит 30 дней): компьютер был выключен в полночь. Нет — ErrNothing.
+func (c *Client) HubCopyDay(ctx context.Context, day string) (Copy, error) {
+	if !dayRe.MatchString(day) {
+		return Copy{}, fmt.Errorf("неверный день: %q", day)
+	}
+	return c.hubCopy(ctx, "/api/pc/copy?day="+day)
+}
+
+var dayRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+
+// DayCopy — копия хаба прошедшего дня в списке хаба.
+type DayCopy struct {
+	Day    string `json:"day"`
+	Bytes  int64  `json:"bytes"`
+	Sha256 string `json:"sha256"`
+}
+
+// HubCopies — какие прошедшие дни хаб хранит (новые сверху).
+func (c *Client) HubCopies(ctx context.Context) ([]DayCopy, error) {
+	resp, err := c.do(ctx, "GET", "/api/pc/copies", nil, true)
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Copies []DayCopy `json:"copies"`
+	}
+	return r.Copies, readJSON(resp, &r)
+}
+
+func (c *Client) hubCopy(ctx context.Context, path string) (Copy, error) {
+	resp, err := c.do(ctx, "GET", path, nil, true)
 	if err != nil {
 		return Copy{}, err
 	}
 	if resp.StatusCode == http.StatusConflict {
 		resp.Body.Close()
 		return Copy{}, ErrNoPassword
+	}
+	if resp.StatusCode == http.StatusNotFound && path != "/api/pc/copy" {
+		resp.Body.Close()
+		return Copy{}, ErrNothing
 	}
 	if resp.StatusCode != http.StatusOK {
 		return Copy{}, readJSON(resp, nil)
@@ -222,13 +259,28 @@ func (c *Client) HubCopy(ctx context.Context) (Copy, error) {
 }
 
 // Status — что программа сообщает о себе (Настройки → Компьютеры).
+// Work — что программа делает сейчас (null — ничего); Usage — сколько занимает каждый проект на диске; Days — дни копий
+// баз на диске (30 последних): по ним хаб сравнивает компьютеры.
 type Status struct {
-	Version string         `json:"version"`
-	OS      string         `json:"os"`
-	Disks   any            `json:"disks"`
-	Copies  map[string]any `json:"copies,omitempty"`
-	Error   *string        `json:"error"`
-	Files   any            `json:"files,omitempty"`
+	Version string              `json:"version"`
+	OS      string              `json:"os"`
+	Disks   any                 `json:"disks"`
+	Copies  map[string]any      `json:"copies,omitempty"`
+	Error   *string             `json:"error"`
+	Files   any                 `json:"files,omitempty"`
+	Work    *Work               `json:"work"`
+	Usage   map[string]Usage    `json:"usage,omitempty"`
+	Days    map[string][]string `json:"days,omitempty"`
+}
+
+type Work struct {
+	Step string `json:"step"`
+	At   string `json:"at"`
+}
+
+type Usage struct {
+	Bytes int64 `json:"bytes"`
+	Files int   `json:"files"`
 }
 
 func (c *Client) SendStatus(ctx context.Context, s Status) error {

@@ -271,7 +271,7 @@ func TestBusinessVer(t *testing.T) {
 	}
 	b := hub.Business{ID: 7, Slug: "shop", Name: "Shop", Ver: "v1", Files: []hub.PcFile{{Key: "state", Folder: "Excel", Name: "Shop-2026-10-27.xlsx"}}}
 	res := &Result{}
-	if err := Business(ctx, f, b, dir, "2026-10-27", res, nil); err != nil {
+	if err := Business(ctx, f, b, dir, "2026-10-27", false, res, nil); err != nil {
 		t.Fatal(err)
 	}
 	if read(t, dir, "Клиенты", "Ахмед", "A.xlsx") != "a" || ReadVer(dir) != "v1" || res.Businesses != 1 {
@@ -279,17 +279,17 @@ func TestBusinessVer(t *testing.T) {
 	}
 	asked, excel := f.asked, f.excel
 	// Та же версия — проект не спрашиваем.
-	if err := Business(ctx, f, b, dir, "2026-10-27", res, nil); err != nil || f.asked != asked || f.excel != excel {
+	if err := Business(ctx, f, b, dir, "2026-10-27", false, res, nil); err != nil || f.asked != asked || f.excel != excel {
 		t.Fatal("та же версия — спросили снова")
 	}
 	b.Ver = "v2"
-	if err := Business(ctx, f, b, dir, "2026-10-27", res, nil); err != nil || f.asked == asked || f.excel != excel+1 || ReadVer(dir) != "v2" {
+	if err := Business(ctx, f, b, dir, "2026-10-27", false, res, nil); err != nil || f.asked == asked || f.excel != excel+1 || ReadVer(dir) != "v2" {
 		t.Fatal("новая версия — не спросили")
 	}
 	// Связь пропала — ошибка наверх, версия не записывается.
 	f.items = func(url.Values) (any, error) { return nil, hub.ErrRevoked }
 	b.Ver = "v3"
-	if err := Business(ctx, f, b, dir, "2026-10-27", res, nil); err == nil || ReadVer(dir) != "v2" {
+	if err := Business(ctx, f, b, dir, "2026-10-27", false, res, nil); err == nil || ReadVer(dir) != "v2" {
 		t.Fatal("ошибка связи проглочена")
 	}
 }

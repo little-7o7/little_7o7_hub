@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"time"
 )
 
@@ -120,4 +121,65 @@ func fileSha(path string) (string, error) {
 func Exists(path string) bool {
 	st, err := os.Stat(path)
 	return err == nil && st.Mode().IsRegular() && st.Size() > 0
+}
+
+// Dated — файл дня в папке копий проекта и его день.
+type Dated struct {
+	Day  string
+	Path string
+}
+
+// List — файлы дней проекта на диске («Little Hub» диска root), старые первыми.
+func List(root string, p Project) []Dated {
+	base := filepath.Join(root, p.Folder, "Копии базы")
+	months, err := os.ReadDir(base)
+	if err != nil {
+		return nil
+	}
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(p.Slug) + `-(\d{4}-\d{2}-\d{2})\.` + regexp.QuoteMeta(p.Ext) + `$`)
+	var out []Dated
+	for _, m := range months {
+		if !m.IsDir() || !monthRe.MatchString(m.Name()) {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(base, m.Name()))
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if g := re.FindStringSubmatch(f.Name()); g != nil && f.Type().IsRegular() && ValidDay(g[1]) {
+				out = append(out, Dated{Day: g[1], Path: filepath.Join(base, m.Name(), f.Name())})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Day < out[j].Day })
+	return out
+}
+
+var monthRe = regexp.MustCompile(`^\d{4}-\d{2}$`)
+
+// Since — день на n дней раньше сегодняшнего (по Ташкенту).
+func Since(now time.Time, n int) string { return Today(now.AddDate(0, 0, -n)) }
+
+// Prune — файлы дней старше keep дней (владелец 2026-11-08: «1 mesyats») удалить, пустые папки месяцев — тоже.
+// Ответ — сколько удалено.
+func Prune(root string, p Project, now time.Time, keep int) int {
+	oldest := Since(now, keep)
+	n := 0
+	dirs := map[string]bool{}
+	for _, d := range List(root, p) {
+		if d.Day >= oldest {
+			continue
+		}
+		if os.Remove(d.Path) == nil {
+			n++
+			dirs[filepath.Dir(d.Path)] = true
+		}
+	}
+	for dir := range dirs {
+		if left, err := os.ReadDir(dir); err == nil && len(left) == 0 {
+			_ = os.Remove(dir)
+		}
+	}
+	return n
 }
