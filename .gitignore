@@ -1,0 +1,4 @@
+/dist/
+*.exe
+/littlehub
+coverage.out

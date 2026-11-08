@@ -1,0 +1,73 @@
+/* Окно Little Hub — как хаб: сплошные цвета, видимые границы и тени, системный шрифт Apple. */
+:root {
+  --bg: #f2f2f7; --card: #fff; --card-2: #f5f5f8; --line: #d1d1d6; --line-strong: #aeaeb2;
+  --ink: #1c1c1e; --ink-2: #48484a; --ink-3: #6e6e73; --accent: #0a66d8; --accent-soft: #e5f0fd;
+  --danger: #c4281c; --danger-soft: #fdecea; --ok: #1d7d3a; --ok-soft: #e6f4ea; --warn: #9a5b00; --warn-soft: #fff4e0;
+  --shadow: 0 1px 2px #0000000f, 0 4px 14px #00000012;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000; --card: #1c1c1e; --card-2: #2c2c2e; --line: #3a3a3c; --line-strong: #545458;
+    --ink: #f2f2f7; --ink-2: #d1d1d6; --ink-3: #98989d; --accent: #3b8cf5; --accent-soft: #10243d;
+    --danger: #ff6b5e; --danger-soft: #3a1714; --ok: #4cc26a; --ok-soft: #123019; --warn: #f0a635; --warn-soft: #33240b;
+    --shadow: 0 1px 2px #000, 0 4px 14px #000;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+.top { display: flex; align-items: center; gap: 12px; max-width: 980px; margin: 0 auto; padding: 20px 16px 8px; }
+.top img { border-radius: 9px; box-shadow: var(--shadow); }
+h1 { margin: 0; font-size: 24px; letter-spacing: -0.02em; }
+h2 { margin: 0 0 6px; font-size: 17px; }
+main { max-width: 980px; margin: 0 auto; padding: 8px 16px 32px; display: grid; gap: 14px; }
+.grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 16px; }
+.head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+.head h2 { margin: 0; }
+.muted { color: var(--ink-3); margin: 2px 0 0; }
+.small { font-size: 13px; }
+.center { text-align: center; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0.04em; }
+.list { list-style: none; margin: 8px 0 0; padding: 0; }
+.list li { border-top: 1px solid var(--line); padding: 9px 0; display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.list li:first-child { border-top: 0; }
+.row { display: flex; gap: 8px; margin-top: 10px; }
+.stack { display: grid; gap: 8px; margin-top: 10px; }
+.field { width: 100%; border: 1px solid var(--line-strong); background: var(--card); color: var(--ink); border-radius: 10px; padding: 9px 11px; font-size: 15px; }
+.field:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+.btn { display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; padding: 8px 14px; font: 600 14px/1.2 inherit; border: 1px solid var(--line-strong); background: var(--card); color: var(--ink); box-shadow: 0 1px 1px #0000000d; white-space: nowrap; cursor: pointer; }
+.btn:hover { background: var(--card-2); }
+.btn:disabled { color: var(--ink-3); cursor: wait; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
+.btn-small { padding: 5px 10px; font-size: 13px; border-radius: 8px; }
+.btn-danger { color: var(--danger); border-color: var(--danger); }
+.badge { display: inline-flex; white-space: nowrap; flex: none; border-radius: 999px; border: 1px solid var(--line); background: var(--card-2); color: var(--ink-2); padding: 1px 8px; font-size: 12px; font-weight: 600; }
+.badge.ok { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
+.badge.warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+.badge.bad { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+.badge.accent { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.notice { border: 1px solid var(--warn); background: var(--warn-soft); color: var(--warn); border-radius: 12px; padding: 10px 14px; font-weight: 600; margin-bottom: 10px; }
+.notice.bad { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+.err { border: 1px solid var(--danger); background: var(--danger-soft); color: var(--danger); border-radius: 10px; padding: 8px 12px; font-weight: 600; margin: 10px 0 0; }
+.bar { width: 100%; height: 8px; border: 1px solid var(--line); background: var(--card-2); border-radius: 999px; overflow: hidden; margin-top: 4px; }
+.bar > span { display: block; height: 100%; background: var(--accent); }
+.bar > span.warn { background: var(--warn); }
+.bar > span.bad { background: var(--danger); }
+.disk { flex: 1 1 100%; }
+.disk .top-line { display: flex; justify-content: space-between; gap: 8px; }
+.disk .path { min-width: 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.disk .acts { display: flex; gap: 6px; margin-top: 6px; }
+.log { list-style: none; margin: 6px 0 0; padding: 0; max-height: 280px; overflow: auto; font-size: 13px; }
+.log li { padding: 4px 0; border-top: 1px solid var(--line); display: flex; gap: 10px; }
+.log li:first-child { border-top: 0; }
+.log time { color: var(--ink-3); flex: none; width: 8.5em; }
+.log .bad { color: var(--danger); }
+.lang { margin-left: auto; display: grid; grid-auto-flow: column; gap: 2px; border: 1px solid var(--line); background: var(--card-2); border-radius: 10px; padding: 2px; }
+.lang button { border: 1px solid transparent; background: none; color: var(--ink-2); border-radius: 8px; padding: 4px 10px; font-weight: 600; cursor: pointer; }
+.lang button[aria-pressed="true"] { border-color: var(--line-strong); background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
+.more { margin-top: 8px; font-size: 13px; color: var(--ink-3); }
+.more input { margin-top: 6px; }
+@media (max-width: 520px) { .row { flex-direction: column; } }

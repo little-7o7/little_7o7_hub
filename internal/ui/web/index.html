@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Little Hub</title>
+<link rel="icon" href="/icon.png">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top">
+  <img src="/icon.png" alt="" width="36" height="36">
+  <div>
+    <h1>Little Hub</h1>
+    <p id="sub" class="muted"></p>
+  </div>
+  <div class="lang" role="group">
+    <button type="button" data-lang="ru">RU</button>
+    <button type="button" data-lang="en">EN</button>
+  </div>
+</header>
+<main>
+  <div id="notices"></div>
+
+  <section class="card" id="pairCard" hidden>
+    <h2 data-t="pairTitle"></h2>
+    <p class="muted" data-t="pairText"></p>
+    <form id="pairForm" class="row">
+      <input id="code" class="field mono" autocomplete="off" placeholder="XXXX-XXXX-XXXX-XXXX" maxlength="24" required>
+      <button class="btn btn-primary" data-t="pairBtn"></button>
+    </form>
+    <details class="more"><summary data-t="hubAddr"></summary><input id="hubUrl" class="field" placeholder="https://little-7o7.vercel.app"></details>
+    <p id="pairErr" class="err" hidden></p>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <div class="head">
+        <h2 data-t="copiesTitle"></h2>
+        <button id="saveNow" class="btn btn-small" data-t="saveNow"></button>
+      </div>
+      <ul id="copies" class="list"></ul>
+      <p id="waiting" class="muted small" hidden></p>
+    </section>
+
+    <section class="card">
+      <h2 data-t="disksTitle"></h2>
+      <p class="muted small" data-t="disksText"></p>
+      <ul id="disks" class="list"></ul>
+      <form id="diskForm" class="row">
+        <input id="diskPath" class="field" list="suggest" autocomplete="off" data-ph="diskPh">
+        <datalist id="suggest"></datalist>
+        <button class="btn" data-t="add"></button>
+      </form>
+      <p id="diskErr" class="err" hidden></p>
+    </section>
+
+    <section class="card">
+      <div class="head">
+        <h2 data-t="ratesTitle"></h2>
+        <button id="ratesNow" class="btn btn-small" data-t="send"></button>
+      </div>
+      <p id="ratesAt" class="muted small"></p>
+      <ul id="rates" class="list"></ul>
+    </section>
+
+    <section class="card">
+      <h2 data-t="decryptTitle"></h2>
+      <p class="muted small" data-t="decryptText"></p>
+      <form id="decForm" class="stack">
+        <input id="decFile" type="file" class="field" required>
+        <input id="decPass" type="password" class="field" autocomplete="off" data-ph="decPh" required>
+        <button class="btn" data-t="decBtn"></button>
+      </form>
+      <p id="decErr" class="err" hidden></p>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2 data-t="logTitle"></h2>
+    <ul id="log" class="log"></ul>
+  </section>
+  <p id="ver" class="muted small center"></p>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

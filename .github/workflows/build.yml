@@ -1,0 +1,85 @@
+# Тесты на каждый push; Windows собирается на Linux (без cgo). Mac (значок требует cgo) — только для выпуска (тег v*)
+# или вручную: минуты macOS в закрытом репозитории стоят в 10 раз дороже. Выпуск: три файла и SHA256SUMS — их сверяют
+# хаб (little_7o7/src/lib/pc-release.ts), команда установки и автообновление программы.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: GOOS=windows go vet ./...
+      - run: go test -race -cover ./...
+      - name: Сборка для Windows
+        run: |
+          VERSION=0.0.0-ci
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION="${GITHUB_REF_NAME#v}"; fi
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=$VERSION" -o dist/LittleHub-windows-amd64.exe ./cmd/littlehub
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/
+
+  mac:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Сборка для Mac (Apple Silicon и Intel)
+        run: |
+          VERSION=0.0.0-ci
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION="${GITHUB_REF_NAME#v}"; fi
+          LDF="-s -w -X main.version=$VERSION"
+          CGO_ENABLED=1 GOARCH=arm64 CC="clang -arch arm64" go build -trimpath -ldflags "$LDF" -o dist/LittleHub-darwin-arm64 ./cmd/littlehub
+          CGO_ENABLED=1 GOARCH=amd64 CC="clang -arch x86_64" go build -trimpath -ldflags "$LDF" -o dist/LittleHub-darwin-amd64 ./cmd/littlehub
+          # Своя подпись (ad-hoc): без неё Apple Silicon не запустит файл.
+          codesign --force --sign - dist/LittleHub-darwin-arm64 dist/LittleHub-darwin-amd64
+          ./dist/LittleHub-darwin-arm64 --self-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: dist/
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Выпуск
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum LittleHub-windows-amd64.exe LittleHub-darwin-arm64 LittleHub-darwin-amd64 > SHA256SUMS
+          cat SHA256SUMS
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          NOTES="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
+          [ -n "$NOTES" ] || NOTES="Little Hub $GITHUB_REF_NAME"
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "Little Hub $GITHUB_REF_NAME" --notes "$NOTES" \
+            LittleHub-windows-amd64.exe LittleHub-darwin-arm64 LittleHub-darwin-amd64 SHA256SUMS
