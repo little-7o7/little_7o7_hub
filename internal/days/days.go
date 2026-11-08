@@ -7,6 +7,7 @@ package days
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -101,6 +102,7 @@ func Put(path string, data []byte, wantSha string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	Record(path, got)
 	return nil
 }
 
@@ -182,4 +184,85 @@ func Prune(root string, p Project, now time.Time, keep int) int {
 		}
 	}
 	return n
+}
+
+// ---------- Проверка копий раз в неделю (пункт 86) ----------
+
+// ShaFile — SHA-256 записанных файлов дней: «<проект>/Копии базы/.littlehub-sha.json», ключ — «ГГГГ-ММ/имя».
+const ShaFile = ".littlehub-sha.json"
+
+func shaPlace(path string) (manifest, key string) {
+	month := filepath.Dir(path)
+	return filepath.Join(filepath.Dir(month), ShaFile), filepath.Base(month) + "/" + filepath.Base(path)
+}
+
+func readShas(manifest string) map[string]string {
+	out := map[string]string{}
+	if b, err := os.ReadFile(manifest); err == nil {
+		_ = json.Unmarshal(b, &out)
+	}
+	return out
+}
+
+func writeShas(manifest string, m map[string]string) {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	tmp := manifest + ".tmp"
+	if os.WriteFile(tmp, b, 0o644) == nil && os.Rename(tmp, manifest) != nil {
+		_ = os.Remove(tmp)
+	}
+}
+
+// Record — запомнить SHA-256 файла дня, который только что записали.
+func Record(path, sha string) {
+	manifest, key := shaPlace(path)
+	m := readShas(manifest)
+	if m[key] == sha {
+		return
+	}
+	m[key] = sha
+	writeShas(manifest, m)
+}
+
+// Verify — перечитать файлы дней проекта и сверить с записанным SHA-256; check — похож ли файл на копию (заголовок и
+// размер, пароль не нужен). Испорчен — удалить: докачка возьмёт его заново (хаб и Sarpo держат 30 дней). Записи нет
+// (копия от прежней программы) — запомнить. Записи удалённых файлов — забыть. Ответ — сколько проверено и испорченные.
+func Verify(root string, p Project, headLen int, check func(head []byte, size int64) error) (int, []string) {
+	list := List(root, p)
+	manifest := filepath.Join(root, p.Folder, "Копии базы", ShaFile)
+	m := readShas(manifest)
+	keep := map[string]string{}
+	n := 0
+	var bad []string
+	for _, d := range list {
+		_, key := shaPlace(d.Path)
+		sum, err := fileSha(d.Path)
+		if err != nil {
+			continue
+		}
+		head := make([]byte, headLen)
+		size := int64(0)
+		if f, err := os.Open(d.Path); err == nil {
+			k, _ := io.ReadFull(f, head)
+			head = head[:k]
+			if st, err := f.Stat(); err == nil {
+				size = st.Size()
+			}
+			_ = f.Close()
+		}
+		n++
+		if (m[key] != "" && m[key] != sum) || (check != nil && check(head, size) != nil) {
+			if os.Remove(d.Path) == nil {
+				bad = append(bad, d.Day)
+			}
+			continue
+		}
+		keep[key] = sum
+	}
+	if len(list) > 0 || len(m) > 0 {
+		writeShas(manifest, keep)
+	}
+	return n, bad
 }

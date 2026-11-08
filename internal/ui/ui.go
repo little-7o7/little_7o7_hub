@@ -197,6 +197,14 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("POST /api/decrypt", s.decrypt)
+	mux.HandleFunc("GET /api/files", s.browse)
+	mux.HandleFunc("POST /api/files/unlock", s.unlock)
+	mux.HandleFunc("POST /api/files/forget", func(w http.ResponseWriter, r *http.Request) {
+		s.App.Forget()
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/files/open", s.openFile)
+	mux.HandleFunc("POST /api/files/export", s.export)
 	mux.HandleFunc("POST /api/quit", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		if s.Quit != nil {
@@ -332,4 +340,75 @@ func (s *Server) decrypt(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/sql; charset=utf-8")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	_, _ = w.Write(plain)
+}
+
+// ---------- Окно «Файлы» (пункты 85 и 109) ----------
+
+func (s *Server) opener() func(string) error {
+	if s.OpenFolder != nil {
+		return s.OpenFolder
+	}
+	return OpenFolder
+}
+
+func fail(w http.ResponseWriter, err error) {
+	code := 400
+	if errors.Is(err, app.ErrNeedPassword) {
+		code = 401
+	}
+	writeJSON(w, code, map[string]any{"error": err.Error(), "password": code == 401})
+}
+
+func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
+	f, err := s.App.Browse(r.URL.Query().Get("path"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, f)
+}
+
+func (s *Server) unlock(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Password string }
+	_ = json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&b)
+	if err := s.App.Unlock(b.Password); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// openFile — «Открыть»: открытый файл — с диска, под паролем — расшифрованный во временную папку, в программе по
+// умолчанию (Excel, просмотр фото). Копия базы — показываем расшифрованный SQL в папке.
+func (s *Server) openFile(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Path string }
+	_ = json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&b)
+	o, err := s.App.OpenFile(b.Path)
+	if err == nil {
+		target := o.Path
+		if o.Reveal {
+			target = filepath.Dir(o.Path)
+		}
+		err = s.opener()(target)
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, o)
+}
+
+// export — «Сохранить открытыми»: папку расшифровать рядом с «Little Hub» и открыть её.
+func (s *Server) export(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Path string }
+	_ = json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&b)
+	dir, n, err := s.App.Export(b.Path)
+	if err == nil {
+		_ = s.opener()(dir)
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"folder": dir, "files": n})
 }

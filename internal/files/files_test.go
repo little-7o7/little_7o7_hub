@@ -124,6 +124,9 @@ func TestOk(t *testing.T) {
 	}
 }
 
+// plainDisk — без пароля копий и без «Старых версий»: как программа 1.2.
+var plainDisk = &Disk{}
+
 func TestSyncGroup(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -135,7 +138,7 @@ func TestSyncGroup(t *testing.T) {
 	root, old := filepath.Join(dir, "People"), filepath.Join(dir, "People (old)")
 	sync := func(g Group) {
 		t.Helper()
-		if _, err := SyncGroup(ctx, f, 7, dir, g, res, nil); err != nil {
+		if _, err := SyncGroup(ctx, f, 7, dir, plainDisk, g, res, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -215,7 +218,7 @@ func TestSyncGroupBadBatch(t *testing.T) {
 	}
 	res := &Result{}
 	g := Group{Kind: "client", Folder: "P", Archive: "P (a)", Files: []string{"A.xlsx"}, Items: []Item{{ID: 1, Dir: "A", Ver: "1"}, {ID: 2, Dir: "B", Ver: "1"}, {ID: 3, Dir: "C", Ver: "1"}}}
-	if _, err := SyncGroup(context.Background(), f, 1, dir, g, res, nil); err != nil {
+	if _, err := SyncGroup(context.Background(), f, 1, dir, plainDisk, g, res, nil); err != nil {
 		t.Fatal(err)
 	}
 	if read(t, dir, "P", "A", "A.xlsx") != "ok" || read(t, dir, "P", "C", "A.xlsx") != "ok" || len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "сбой") {
@@ -239,7 +242,7 @@ func TestExcel(t *testing.T) {
 	for _, n := range []string{"Shop-2026-09-01.xlsx", "Shop-2026-10-20.xlsx", "Other-2026-09-01.xlsx"} {
 		_ = os.WriteFile(filepath.Join(dir, "Excel", n), []byte("x"), 0o644)
 	}
-	if err := Excel(ctx, f, b, dir, "2026-10-27", true, res); err != nil {
+	if err := Excel(ctx, f, b, dir, &Disk{Today: "2026-10-27"}, true, res); err != nil {
 		t.Fatal(err)
 	}
 	if f.excel != 3 || read(t, dir, "Excel", "Shop-2026-10-27.xlsx") != "excel?b=7&f=state" || read(t, dir, "Profit.xlsx") == "" || read(t, dir, "Дни", "2026-10-26.xlsx") == "" {
@@ -250,11 +253,11 @@ func TestExcel(t *testing.T) {
 		t.Fatalf("уборка: %v", ex)
 	}
 	// Бизнес не изменился — ничего не качаем.
-	if err := Excel(ctx, f, b, dir, "2026-10-27", false, res); err != nil || f.excel != 3 {
+	if err := Excel(ctx, f, b, dir, &Disk{Today: "2026-10-27"}, false, res); err != nil || f.excel != 3 {
 		t.Fatalf("скачано второй раз: %d", f.excel)
 	}
 	// Изменился — заново «что есть сейчас» и refresh, прошедший день — нет.
-	if err := Excel(ctx, f, b, dir, "2026-10-27", true, res); err != nil || f.excel != 5 {
+	if err := Excel(ctx, f, b, dir, &Disk{Today: "2026-10-27"}, true, res); err != nil || f.excel != 5 {
 		t.Fatalf("обновление: %d", f.excel)
 	}
 }
@@ -271,7 +274,7 @@ func TestBusinessVer(t *testing.T) {
 	}
 	b := hub.Business{ID: 7, Slug: "shop", Name: "Shop", Ver: "v1", Files: []hub.PcFile{{Key: "state", Folder: "Excel", Name: "Shop-2026-10-27.xlsx"}}}
 	res := &Result{}
-	if err := Business(ctx, f, b, dir, "2026-10-27", false, res, nil); err != nil {
+	if err := Business(ctx, f, b, dir, &Disk{Today: "2026-10-27"}, false, res, nil); err != nil {
 		t.Fatal(err)
 	}
 	if read(t, dir, "Клиенты", "Ахмед", "A.xlsx") != "a" || ReadVer(dir) != "v1" || res.Businesses != 1 {
@@ -279,17 +282,17 @@ func TestBusinessVer(t *testing.T) {
 	}
 	asked, excel := f.asked, f.excel
 	// Та же версия — проект не спрашиваем.
-	if err := Business(ctx, f, b, dir, "2026-10-27", false, res, nil); err != nil || f.asked != asked || f.excel != excel {
+	if err := Business(ctx, f, b, dir, &Disk{Today: "2026-10-27"}, false, res, nil); err != nil || f.asked != asked || f.excel != excel {
 		t.Fatal("та же версия — спросили снова")
 	}
 	b.Ver = "v2"
-	if err := Business(ctx, f, b, dir, "2026-10-27", false, res, nil); err != nil || f.asked == asked || f.excel != excel+1 || ReadVer(dir) != "v2" {
+	if err := Business(ctx, f, b, dir, &Disk{Today: "2026-10-27"}, false, res, nil); err != nil || f.asked == asked || f.excel != excel+1 || ReadVer(dir) != "v2" {
 		t.Fatal("новая версия — не спросили")
 	}
 	// Связь пропала — ошибка наверх, версия не записывается.
 	f.items = func(url.Values) (any, error) { return nil, hub.ErrRevoked }
 	b.Ver = "v3"
-	if err := Business(ctx, f, b, dir, "2026-10-27", false, res, nil); err == nil || ReadVer(dir) != "v2" {
+	if err := Business(ctx, f, b, dir, &Disk{Today: "2026-10-27"}, false, res, nil); err == nil || ReadVer(dir) != "v2" {
 		t.Fatal("ошибка связи проглочена")
 	}
 }
@@ -336,7 +339,7 @@ func TestProjectCopy(t *testing.T) {
 	if _, err := ProjectCopy(ctx, f, p, root, "", ""); err == nil || days.Exists(filepath.Join(root, "Sarpo Business", "Копии базы", "2026-11", "sarpo-2026-11-08.l7copy")) {
 		t.Fatal("неполная копия поставилась")
 	}
-	if left := names(t, filepath.Join(root, "Sarpo Business", "Копии базы")); len(left) != 1 || !regexp.MustCompile(`^2026-11$`).MatchString(left[0]) {
+	if left := names(t, filepath.Join(root, "Sarpo Business", "Копии базы")); len(left) != 2 || left[0] != days.ShaFile || !regexp.MustCompile(`^2026-11$`).MatchString(left[1]) {
 		t.Fatalf("остался временный файл: %v", left)
 	}
 }

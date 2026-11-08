@@ -70,4 +70,11 @@ main { max-width: 980px; margin: 0 auto; padding: 8px 16px 32px; display: grid; 
 .lang button[aria-pressed="true"] { border-color: var(--line-strong); background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
 .more { margin-top: 8px; font-size: 13px; color: var(--ink-3); }
 .more input { margin-top: 6px; }
+.acts { display: flex; gap: 6px; }
+.crumbs { margin-top: 10px; font-size: 14px; overflow-wrap: anywhere; }
+.link { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
+.link:hover { text-decoration: underline; }
+.files { max-height: 420px; overflow: auto; }
+.files .name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.files .name.dir { color: var(--ink); }
 @media (max-width: 520px) { .row { flex-direction: column; } }

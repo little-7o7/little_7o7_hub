@@ -1,6 +1,7 @@
 package days
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -114,5 +115,43 @@ func TestListAndPrune(t *testing.T) {
 	}
 	if List(t.TempDir(), p) != nil {
 		t.Fatal("нет папки — пусто")
+	}
+}
+
+func TestRecordAndVerify(t *testing.T) {
+	root := t.TempDir()
+	p := Project{Slug: "hub", Folder: "Хаб", Ext: "l7copy"}
+	put := func(day, body string) string {
+		rel, _ := Rel(p, day)
+		if err := Put(filepath.Join(root, rel), []byte(body), ""); err != nil {
+			t.Fatal(err)
+		}
+		return filepath.Join(root, rel)
+	}
+	good := put("2026-11-07", "COPY-7")
+	bad := put("2026-11-08", "COPY-8")
+	_ = os.WriteFile(bad, []byte("COPY-X"), 0o644) // испортился на диске после записи
+	check := func(head []byte, size int64) error {
+		if !bytes.HasPrefix(head, []byte("COPY")) {
+			return errors.New("не копия")
+		}
+		return nil
+	}
+	n, broken := Verify(root, p, 4, check)
+	if n != 2 || len(broken) != 1 || broken[0] != "2026-11-08" || Exists(bad) || !Exists(good) {
+		t.Fatal(n, broken)
+	}
+	// Не похожа на копию — тоже испорчена; запись удалённых забывается.
+	_ = os.WriteFile(good, []byte("JUNK"), 0o644)
+	Record(good, "x") // запись не та — а файл тем более
+	if _, broken := Verify(root, p, 4, check); len(broken) != 1 || Exists(good) {
+		t.Fatal(broken)
+	}
+	b, _ := os.ReadFile(filepath.Join(root, "Хаб", "Копии базы", ShaFile))
+	if string(b) != "{}" {
+		t.Fatal(string(b))
+	}
+	if n, _ := Verify(t.TempDir(), p, 4, nil); n != 0 {
+		t.Fatal("пусто")
 	}
 }

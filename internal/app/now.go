@@ -333,7 +333,7 @@ func copyProjects(list []hub.FileProject) []days.Project {
 }
 
 // prune — копии баз старше месяца удалить (пункт 107).
-func (a *App) prune(root string, list []hub.FileProject) {
+func (a *App) prune(root string, list []hub.FileProject, disk *files.Disk) {
 	n := 0
 	for _, p := range copyProjects(list) {
 		n += days.Prune(root, p, a.now(), KeepCopies)
@@ -341,6 +341,11 @@ func (a *App) prune(root string, list []hub.FileProject) {
 	if n > 0 {
 		a.Logf(false, "Удалены копии баз старше %d дней: %d", KeepCopies, n)
 	}
+	// «Старые версии» Excel — тоже месяц (пункт 108); записанные открытыми до пароля копий — зашифровать.
+	if n := files.PruneOld(root, a.now(), KeepCopies); n > 0 {
+		a.Logf(false, "Удалены старые версии Excel старше %d дней: %d дн.", KeepCopies, n)
+	}
+	files.SealAll(filepath.Join(root, files.OldFolder), disk)
 }
 
 // measure — сколько занимает каждый проект на диске (пункт 115), не чаще раза в 6 часов.
@@ -351,7 +356,7 @@ func (a *App) measure(root string, list []hub.FileProject) {
 	if !due {
 		return
 	}
-	folders := map[string]string{HubProject.Slug: HubProject.Folder}
+	folders := map[string]string{HubProject.Slug: HubProject.Folder, "old": files.OldFolder}
 	for _, p := range list {
 		if files.SlugRe.MatchString(p.Slug) && files.Ok(p.Folder) {
 			folders[p.Slug] = p.Folder
@@ -361,7 +366,7 @@ func (a *App) measure(root string, list []hub.FileProject) {
 	for slug, folder := range folders {
 		var u hub.Usage
 		_ = filepath.WalkDir(filepath.Join(root, folder), func(_ string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
+			if err != nil || d.IsDir() || strings.HasPrefix(d.Name(), ".") { // служебные файлы программы не в счёт
 				return nil
 			}
 			if info, err := d.Info(); err == nil && info.Mode().IsRegular() {

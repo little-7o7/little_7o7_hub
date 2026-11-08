@@ -16,6 +16,12 @@ const T = {
     filesTitle: "Файлы проектов", filesText: "Excel, папки клиентов, поставщиков, мастеров и товаров с фото — в папке «Little Hub» на диске.",
     filesNone: "Ещё не раскладывались", filesBusy: "Раскладываю…", filesLine: "{t} · бизнесов {b} · записано файлов {f} · папок {i} · фото {p}", locked: "Открыты в Excel и не обновились: {n}",
     openFolder: "Открыть папку", folder: "Папка: {p}", open: "Открыть", progTitle: "Программа", updNow: "Обновить программу", updating: "Проверяю…", latestOk: "последняя",
+    vaultTitle: "Файлы", vExport: "Сохранить открытыми", vForget: "Закрыть пароль", vUnlock: "Открыть файлы",
+    vSealed: "Файлы проектов лежат под паролем копий: без него их не открыть, даже если унесут компьютер. Откройте их здесь — пароль копий нужен один раз, программа помнит его 15 минут. Открытый файл — копия для просмотра: правки в нём в Little Hub не сохраняются.",
+    vOpenFiles: "Пароль копий в хабе не задан: файлы лежат открытыми, их можно открыть и в Проводнике.",
+    vRoot: "Little Hub", vEmpty: "Пусто", vPass: "Введите пароль копий, чтобы открыть файл.", vCopy: "копия базы", vLock: "под паролем",
+    vExportAsk: "Расшифровать эту папку целиком? Файлы лягут рядом с «Little Hub» без пароля — после работы их лучше удалить.",
+    vExported: "Готово: {n} файлов в {p}", vWorking: "Расшифровываю…",
   },
   en: {
     pairTitle: "Connect to the hub", pairText: "Hub → Settings → Computers → “Add computer”. Type the code from there.", pairBtn: "Connect",
@@ -31,6 +37,12 @@ const T = {
     filesTitle: "Project files", filesText: "Excel, folders of clients, suppliers, masters and products with photos — in the “Little Hub” folder on the disk.",
     filesNone: "Not laid out yet", filesBusy: "Laying out…", filesLine: "{t} · businesses {b} · files written {f} · folders {i} · photos {p}", locked: "Open in Excel and not updated: {n}",
     openFolder: "Open folder", folder: "Folder: {p}", open: "Open", progTitle: "Program", updNow: "Update the program", updating: "Checking…", latestOk: "latest",
+    vaultTitle: "Files", vExport: "Save unencrypted", vForget: "Forget password", vUnlock: "Unlock files",
+    vSealed: "Project files are locked with the backup password: nobody can open them without it, even if the computer is stolen. Open them here — type the backup password once, the program remembers it for 15 minutes. An opened file is a copy for viewing: edits to it are not saved in Little Hub.",
+    vOpenFiles: "No backup password in the hub: files are not encrypted and open in Explorer too.",
+    vRoot: "Little Hub", vEmpty: "Empty", vPass: "Type the backup password to open the file.", vCopy: "database copy", vLock: "locked",
+    vExportAsk: "Decrypt this whole folder? The files will be placed next to “Little Hub” without a password — better delete them when done.",
+    vExported: "Done: {n} files in {p}", vWorking: "Decrypting…",
   },
 };
 
@@ -168,6 +180,95 @@ function render(s) {
   $("openFolder").disabled = !s.folder;
 }
 
+// ---------- Окно «Файлы» ----------
+let vPath = "";
+let vWant = null; // файл, который открыть после пароля
+
+async function vLoad(path) {
+  try {
+    const r = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    vPath = j.path;
+    vRender(j);
+    showErr("vErr", "");
+  } catch (e) {
+    showErr("vErr", e.message);
+  }
+}
+
+function vRender(f) {
+  $("vText").textContent = f.sealed ? t("vSealed") : t("vOpenFiles");
+  $("vForget").hidden = !f.unlocked;
+  $("vPassForm").hidden = f.unlocked || !f.sealed;
+  const parts = f.path ? f.path.split("/") : [];
+  const cr = $("vCrumbs");
+  cr.replaceChildren(el("button", { class: "link", type: "button", onclick: () => vLoad("") }, t("vRoot")));
+  parts.forEach((p, i) => cr.append(el("span", { class: "muted" }, " / "), el("button", { class: "link", type: "button", onclick: () => vLoad(parts.slice(0, i + 1).join("/")) }, p)));
+  const l = $("vList");
+  l.replaceChildren();
+  if (!f.entries.length) l.append(el("li", {}, el("span", { class: "muted" }, t("vEmpty"))));
+  for (const e of f.entries) {
+    const path = f.path ? `${f.path}/${e.name}` : e.name;
+    const meta = e.dir ? "" : `${e.at} · ${size(e.size)}${e.copy ? " · " + t("vCopy") : e.sealed ? " · " + t("vLock") : ""}`;
+    l.append(
+      el(
+        "li",
+        {},
+        el("button", { class: `link name ${e.dir ? "dir" : ""}`, type: "button", onclick: () => (e.dir ? vLoad(path) : vOpen(path)) }, e.dir ? `📁 ${e.name}` : e.name),
+        meta ? el("span", { class: "muted small" }, meta) : null,
+      ),
+    );
+  }
+}
+
+async function vOpen(path) {
+  try {
+    await post("/api/files/open", { path });
+    showErr("vErr", "");
+  } catch (e) {
+    if (/пароль|password/i.test(e.message)) {
+      vWant = path;
+      $("vPassForm").hidden = false;
+      $("vPass").focus();
+      showErr("vErr", t("vPass"));
+    } else showErr("vErr", e.message);
+  }
+}
+
+$("vPassForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await post("/api/files/unlock", { password: $("vPass").value });
+    $("vPass").value = "";
+    showErr("vErr", "");
+    const want = vWant;
+    vWant = null;
+    await vLoad(vPath);
+    if (want) vOpen(want);
+  } catch (x) {
+    showErr("vErr", x.message);
+  }
+});
+$("vForget").addEventListener("click", async () => {
+  await post("/api/files/forget").catch(() => {});
+  vLoad(vPath);
+});
+$("vExport").addEventListener("click", async () => {
+  if (!confirm(t("vExportAsk"))) return;
+  const d = $("vDone");
+  d.hidden = false;
+  d.textContent = t("vWorking");
+  try {
+    const j = await post("/api/files/export", { path: vPath });
+    d.textContent = t("vExported", { n: j.files, p: j.folder });
+    showErr("vErr", "");
+  } catch (x) {
+    d.hidden = true;
+    showErr("vErr", /пароль|password/i.test(x.message) ? t("vPass") : x.message);
+  }
+});
+
 async function refresh() {
   try {
     const r = await fetch("/api/state");
@@ -255,4 +356,5 @@ for (const b of document.querySelectorAll(".lang button"))
 
 texts();
 refresh();
+vLoad("");
 setInterval(refresh, 3000);

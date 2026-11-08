@@ -88,6 +88,25 @@
     </section>
   </div>
 
+  <section class="card" id="vault">
+    <div class="head">
+      <h2 data-t="vaultTitle"></h2>
+      <div class="acts">
+        <button id="vExport" class="btn btn-small" type="button" data-t="vExport"></button>
+        <button id="vForget" class="btn btn-small" type="button" data-t="vForget" hidden></button>
+      </div>
+    </div>
+    <p id="vText" class="muted small"></p>
+    <form id="vPassForm" class="row" hidden>
+      <input id="vPass" type="password" class="field" autocomplete="off" data-ph="decPh">
+      <button class="btn btn-primary" data-t="vUnlock"></button>
+    </form>
+    <nav id="vCrumbs" class="crumbs"></nav>
+    <p id="vErr" class="err" hidden></p>
+    <p id="vDone" class="muted small" hidden></p>
+    <ul id="vList" class="list files"></ul>
+  </section>
+
   <section class="card">
     <div class="head">
       <h2 data-t="progTitle"></h2>

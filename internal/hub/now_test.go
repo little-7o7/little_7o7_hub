@@ -120,7 +120,14 @@ func TestProjectCalls(t *testing.T) {
 			return
 		}
 		only := r.URL.Query().Get("only")
-		_, _ = w.Write([]byte(`{"projects":[{"slug":"` + only + `x","folder":"F","ok":true,"live":true,"flag":"https://p/api/pc-flag/k","businesses":[]}]}`))
+		lock := `null`
+		switch only {
+		case "lock":
+			lock = `{"pub":"qfnUcDh2nSBcOPSzOjaESq10eHwIwBkunNw5WZyasTI=","salt":"AAECAwQFBgcICQoLDA0ODw==","iterations":1000}`
+		case "badlock":
+			lock = `{"pub":"AAAA","salt":"AAECAwQFBgcICQoLDA0ODw==","iterations":1000}`
+		}
+		_, _ = w.Write([]byte(`{"projects":[{"slug":"` + only + `x","folder":"F","ok":true,"live":true,"flag":"https://p/api/pc-flag/k","businesses":[]}],"lock":` + lock + `}`))
 	})
 	mux.HandleFunc("GET /api/pc/p/sarpo/items", func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("b") {
@@ -152,11 +159,18 @@ func TestProjectCalls(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	c := &Client{Base: srv.URL, Token: token, Version: "1.3.0"}
-	ps, err := c.Projects(ctx, "sarpo")
-	if err != nil || len(ps) != 1 || ps[0].Slug != "sarpox" || !ps[0].Live || ps[0].Flag == "" {
+	ps, lock, err := c.Projects(ctx, "sarpo")
+	if err != nil || len(ps) != 1 || ps[0].Slug != "sarpox" || !ps[0].Live || ps[0].Flag == "" || lock != nil {
 		t.Fatal(ps, err)
 	}
-	if _, err := c.Projects(ctx, "../x"); err == nil {
+	// Ключ шифрования файлов — образец хаба (tests/pc-now.test.ts).
+	if _, lock, err := c.Projects(ctx, "lock"); err != nil || lock == nil || hex.EncodeToString(lock.Pub) != "a9f9d47038769d205c38f4b33a36844aad74787c08c0192e9cdc39599c9ab132" || lock.Iter != 1000 {
+		t.Fatal("ключ", lock, err)
+	}
+	if _, _, err := c.Projects(ctx, "badlock"); !IsAPI(err) {
+		t.Fatal("кривой ключ", err)
+	}
+	if _, _, err := c.Projects(ctx, "../x"); err == nil {
 		t.Fatal("неверный проект принят")
 	}
 	var out struct{ Groups []int }

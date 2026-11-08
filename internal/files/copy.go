@@ -2,6 +2,8 @@ package files
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -70,7 +72,8 @@ func FetchCopy(ctx context.Context, src Source, p days.Project, root string, q u
 	if err != nil {
 		return Copied{}, err
 	}
-	s, err := src.Save(ctx, "backup", q, f, hub.MaxCopy)
+	h := sha256.New()
+	s, err := src.Save(ctx, "backup", q, io.MultiWriter(f, h), hub.MaxCopy)
 	serr := f.Sync()
 	cerr := f.Close()
 	if err == nil {
@@ -113,6 +116,7 @@ func FetchCopy(ctx context.Context, src Source, p days.Project, root string, q u
 	if err := os.Rename(t, path); err != nil {
 		return fail(err)
 	}
+	days.Record(path, hex.EncodeToString(h.Sum(nil)))
 	return Copied{Name: name, Day: day, Bytes: s.Bytes, Path: path, Made: max(made, 0)}, nil
 }
 

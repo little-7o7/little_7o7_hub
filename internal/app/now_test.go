@@ -185,7 +185,7 @@ func TestSaveAllAskAndWork(t *testing.T) {
 	f.mu.Unlock()
 	now = now.Add(FlagEvery)
 	a.tick(ctx)
-	for i := 0; i < 200 && excel() < 2; i++ {
+	for i := 0; i < 300 && (excel() < 2 || a.View().FilesBusy); i++ {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if excel() != 2 || !hasLog(a, "сохранить всё сейчас") {

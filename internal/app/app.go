@@ -20,6 +20,7 @@ import (
 	"github.com/little-7o7/little_7o7_hub/internal/days"
 	"github.com/little-7o7/little_7o7_hub/internal/disks"
 	"github.com/little-7o7/little_7o7_hub/internal/files"
+	"github.com/little-7o7/little_7o7_hub/internal/fileseal"
 	"github.com/little-7o7/little_7o7_hub/internal/hub"
 	"github.com/little-7o7/little_7o7_hub/internal/rates"
 	"github.com/little-7o7/little_7o7_hub/internal/secret"
@@ -54,6 +55,11 @@ type App struct {
 	Exe string
 	// OnRestart — новая версия поставлена: перезапуститься.
 	OnRestart func()
+	// OpenDir — временная папка окна «Файлы» (расшифрованные файлы); пусто — папка кэша пользователя.
+	OpenDir string
+	// Candidates — где искать настройки прежней установки (проверки); пусто — диски компьютера.
+	Candidates   func() []string
+	restoredFrom string
 
 	mu        sync.Mutex
 	deb       Debounce
@@ -81,6 +87,9 @@ type App struct {
 	watch   map[string]*projWatch
 	usage   map[string]hub.Usage
 	usageAt time.Time
+	// Окно «Файлы»: пароль копий (15 минут, только в памяти).
+	keys   *fileseal.Keys
+	keysAt time.Time
 	// «Сохранить сейчас на всех» из хаба: последняя виденная просьба (как updSeen).
 	syncSeen   string
 	syncSeenOK bool
@@ -185,10 +194,14 @@ func (a *App) Pair(ctx context.Context, base, code string) (hub.Paired, error) {
 	}
 	err = a.Cfg.Update(func(cfg *config.Config) {
 		cfg.Hub, cfg.Flag, cfg.DeviceID, cfg.Name = b, p.Flag, p.ID, p.Name
+		a.restoreSaved(cfg) // переустановка: диски и язык — с диска прежней установки
 		if len(cfg.Disks) == 0 {
 			cfg.Disks = []string{disks.Default()}
 		}
 	})
+	if a.restoredFrom != "" {
+		a.Logf(false, "Диски и язык взяты из настроек прежней установки: %s", filepath.Join(disks.Root(a.restoredFrom), ProgramFolder, SettingsFile))
+	}
 	a.mu.Lock()
 	a.revoked, a.noPass, a.lastErr = false, false, ""
 	a.mu.Unlock()
@@ -381,7 +394,7 @@ func (a *App) syncFiles(ctx context.Context, only string, force bool) error {
 	if err != nil {
 		return err
 	}
-	list, err := c.Projects(ctx, only)
+	list, lock, err := c.Projects(ctx, only)
 	if err != nil {
 		return err
 	}
@@ -394,6 +407,17 @@ func (a *App) syncFiles(ctx context.Context, only string, force bool) error {
 	root := disks.Root(active)
 	now := a.now()
 	today := days.Today(now)
+	if (lock == nil) != (cfg.Lock == nil) || (lock != nil && lock.Tag() != cfg.Lock.Tag()) {
+		if err := a.Cfg.Update(func(x *config.Config) { x.Lock = lock }); err != nil {
+			return err
+		}
+		if lock != nil {
+			a.Logf(false, "Файлы проектов теперь под паролем копий: открыть их можно в окне Little Hub → «Файлы»")
+		} else {
+			a.Logf(true, "В хабе не задан пароль копий: файлы проектов лежат открытыми")
+		}
+	}
+	disk := &files.Disk{Root: root, Today: today, Lock: lock}
 	state := &config.Files{At: now.UTC().Format(time.RFC3339), Disk: active, Projects: map[string]config.ProjectFiles{}}
 	if cfg.Files != nil && cfg.Files.Disk == active {
 		for k, v := range cfg.Files.Projects {
@@ -402,6 +426,9 @@ func (a *App) syncFiles(ctx context.Context, only string, force bool) error {
 	}
 	var stop error
 	full := only == ""
+	if full {
+		a.verify(root, list) // раз в неделю, до докачки: испорченные копии она возьмёт заново
+	}
 	for _, p := range list {
 		if stop != nil || !files.SlugRe.MatchString(p.Slug) || !files.Ok(p.Folder) {
 			continue
@@ -424,7 +451,7 @@ func (a *App) syncFiles(ctx context.Context, only string, force bool) error {
 			if b.Root {
 				bdir = dir // один «бизнес» у проекта (Strassio) — прямо в его папке
 			}
-			if err := files.Business(ctx, src, b, bdir, today, force, res, a.step); err != nil {
+			if err := files.Business(ctx, src, b, bdir, disk, force, res, a.step); err != nil {
 				stop = err
 				break
 			}
@@ -451,8 +478,9 @@ func (a *App) syncFiles(ctx context.Context, only string, force bool) error {
 	}
 	if stop == nil && full {
 		a.catchUpHub(ctx, c, root)
-		a.prune(root, list)
+		a.prune(root, list, disk)
 		a.measure(root, list)
+		a.keepProgram(root)
 	}
 	a.step("")
 	if stop == nil {
@@ -791,6 +819,8 @@ func (a *App) tick(ctx context.Context) {
 // izmeneniya»), флаг хаба раз в минуту, флаги проектов раз в 30 секунд, курсы раз в 3 часа, обновление раз в 6 часов.
 func (a *App) Run(ctx context.Context) {
 	a.Kick()
+	a.CleanOpen(true) // расшифрованное окном «Файлы» до прошлого выхода (программу закрыли не через «Выход»)
+	defer a.CleanOpen(true)
 	flagT := time.NewTicker(FlagEvery)
 	defer flagT.Stop()
 	rateT := time.NewTicker(rates.Every)
@@ -839,6 +869,7 @@ func (a *App) Run(ctx context.Context) {
 				a.goFiles(ctx)
 			}
 		case <-filesT.C:
+			a.CleanOpen(false)
 			a.mu.Lock()
 			due := FilesDue(a.filesTry, a.now())
 			a.mu.Unlock()
@@ -886,6 +917,9 @@ type View struct {
 	FilesBusy bool                   `json:"filesBusy"`
 	FilesStep string                 `json:"filesStep,omitempty"`
 	Updating  bool                   `json:"updating"`
+	// Sealed — файлы проектов под паролем копий (хаб прислал ключ); Unlocked — окно «Файлы» помнит пароль.
+	Sealed   bool `json:"sealed"`
+	Unlocked bool `json:"unlocked"`
 	// Folder — папка «Little Hub» на диске, куда сейчас идут копии и файлы (кнопка «Открыть папку»).
 	Folder string `json:"folder,omitempty"`
 }
@@ -893,7 +927,7 @@ type View struct {
 func (a *App) View() View {
 	cfg := a.Cfg.Get()
 	st, _, derr := disks.Check(cfg.Disks, a.Space)
-	v := View{Version: a.Version, Paired: a.Paired(), Hub: cfg.Hub, Name: cfg.Name, Disks: st, Copies: cfg.Copies, Today: days.Today(a.now()), RatesAt: cfg.RatesAt, Lang: cfg.Lang, Files: cfg.Files}
+	v := View{Version: a.Version, Paired: a.Paired(), Hub: cfg.Hub, Name: cfg.Name, Disks: st, Copies: cfg.Copies, Today: days.Today(a.now()), RatesAt: cfg.RatesAt, Lang: cfg.Lang, Files: cfg.Files, Sealed: cfg.Lock != nil, Unlocked: a.keysNow() != nil}
 	if derr != nil {
 		v.DiskError = derr.Error()
 	}

@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/little-7o7/little_7o7_hub/internal/fileseal"
 )
 
 // Файлы проектов (Excel, папки клиентов, поставщиков, мастеров, товаров с фото) и копии баз проектов: хаб спрашивает
@@ -75,26 +77,31 @@ type FileProject struct {
 var slugRe = regexp.MustCompile(`^[a-z0-9_-]{1,30}$`)
 var opRe = regexp.MustCompile(`^[a-z]{1,20}$`)
 
-// Projects — проекты с файлами и их бизнесы; only — только этот проект (его флаг сменился).
-func (c *Client) Projects(ctx context.Context, only string) ([]FileProject, error) {
+// Projects — проекты с файлами и их бизнесы; only — только этот проект (его флаг сменился). lock — открытый ключ
+// шифрования файлов из пароля копий (nil — пароль не задан: файлы пишутся открытыми).
+func (c *Client) Projects(ctx context.Context, only string) (_ []FileProject, lock *fileseal.Lock, _ error) {
 	path := "/api/pc/projects"
 	if only != "" {
 		if !slugRe.MatchString(only) {
-			return nil, fmt.Errorf("неверный проект: %q", only)
+			return nil, nil, fmt.Errorf("неверный проект: %q", only)
 		}
 		path += "?only=" + only
 	}
 	resp, err := c.do(ctx, "GET", path, nil, true)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var r struct {
-		Projects []FileProject `json:"projects"`
+		Projects []FileProject  `json:"projects"`
+		Lock     *fileseal.Lock `json:"lock"`
 	}
 	if err := readJSON(resp, &r); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return r.Projects, nil
+	if r.Lock != nil && r.Lock.Valid() != nil {
+		return nil, nil, &APIError{Status: 502, Msg: "хаб прислал неверный ключ шифрования файлов"}
+	}
+	return r.Projects, r.Lock, nil
 }
 
 func (c *Client) project(ctx context.Context, slug, op string, q url.Values) (*http.Response, error) {

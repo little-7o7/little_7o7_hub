@@ -178,3 +178,60 @@ func TestHandlerDirect(t *testing.T) {
 		t.Fatal("ссылка")
 	}
 }
+
+func TestFilesWindow(t *testing.T) {
+	s, _ := server(t)
+	disk := t.TempDir()
+	if err := s.App.SetDisks([]string{disk}); err != nil {
+		t.Fatal(err)
+	}
+	s.App.OpenDir = t.TempDir()
+	_ = os.MkdirAll(disk+"/Little Hub/Sarpo Business", 0o755)
+	_ = os.WriteFile(disk+"/Little Hub/Sarpo Business/A.xlsx", []byte("a"), 0o644)
+	var opened []string
+	s.OpenFolder = func(p string) error { opened = append(opened, p); return nil }
+	key := map[string]string{"X-LH-Key": s.Key}
+	post := map[string]string{"X-LH-Key": s.Key, "X-LH": "1"}
+	if r := req(t, s, "GET", "/api/files?path=Sarpo%20Business", "", nil, nil); r.StatusCode != 401 {
+		t.Fatal("без ключа", r.StatusCode)
+	}
+	r := req(t, s, "GET", "/api/files?path=Sarpo%20Business", "", key, nil)
+	var b bytes.Buffer
+	_, _ = b.ReadFrom(r.Body)
+	if r.StatusCode != 200 || !strings.Contains(b.String(), `"name":"A.xlsx"`) {
+		t.Fatal(r.StatusCode, b.String())
+	}
+	if r := req(t, s, "GET", "/api/files?path=..", "", key, nil); r.StatusCode != 400 {
+		t.Fatal("наружу", r.StatusCode)
+	}
+	// Изменения — только POST с X-LH.
+	if r := req(t, s, "POST", "/api/files/open", "", key, []byte(`{"path":"Sarpo Business/A.xlsx"}`)); r.StatusCode != 403 {
+		t.Fatal("без X-LH", r.StatusCode)
+	}
+	if r := req(t, s, "POST", "/api/files/open", "", post, []byte(`{"path":"Sarpo Business/A.xlsx"}`)); r.StatusCode != 200 || len(opened) != 1 || !strings.HasSuffix(opened[0], "A.xlsx") {
+		t.Fatal("открыть", r.StatusCode, opened)
+	}
+	if r := req(t, s, "POST", "/api/files/open", "", post, []byte(`{"path":"нет.xlsx"}`)); r.StatusCode != 400 {
+		t.Fatal("нет файла", r.StatusCode)
+	}
+	if r := req(t, s, "POST", "/api/files/unlock", "", post, []byte(`{"password":""}`)); r.StatusCode != 400 {
+		t.Fatal("пустой пароль", r.StatusCode)
+	}
+	if r := req(t, s, "POST", "/api/files/unlock", "", post, []byte(`{"password":"любой"}`)); r.StatusCode != 200 {
+		t.Fatal("пароль", r.StatusCode)
+	}
+	if r := req(t, s, "POST", "/api/files/export", "", post, []byte(`{"path":"Sarpo Business"}`)); r.StatusCode != 200 || len(opened) != 2 {
+		t.Fatal("экспорт", r.StatusCode, opened)
+	}
+	if r := req(t, s, "POST", "/api/files/forget", "", post, nil); r.StatusCode != 200 {
+		t.Fatal("забыть", r.StatusCode)
+	}
+	// Файл под паролем без пароля — 401 и «password»: окно покажет поле пароля.
+	_ = os.WriteFile(disk+"/Little Hub/Sarpo Business/B.xlsx.l7", []byte("L7-F-1\n"), 0o644)
+	r = req(t, s, "POST", "/api/files/open", "", post, []byte(`{"path":"Sarpo Business/B.xlsx"}`))
+	b.Reset()
+	_, _ = b.ReadFrom(r.Body)
+	if r.StatusCode != 401 || !strings.Contains(b.String(), `"password":true`) {
+		t.Fatal("нужен пароль", r.StatusCode, b.String())
+	}
+}

@@ -165,15 +165,6 @@ func writeTemp(path string, data []byte) (string, error) {
 	return t, nil
 }
 
-// write — файл целиком: true — записан, false — открыт и не заменён.
-func write(path string, data []byte) (bool, error) {
-	t, err := writeTemp(path, data)
-	if err != nil {
-		return false, err
-	}
-	return put(t, path), nil
-}
-
 // writeHidden — служебный файл (скрытый на Windows: снять «скрытый», заменить, поставить снова).
 func writeHidden(path string, data []byte) error {
 	unhide(path)
@@ -187,25 +178,6 @@ func writeHidden(path string, data []byte) error {
 	}
 	hide(path)
 	return nil
-}
-
-// save — файл проекта во временный рядом и на место. ErrNothing — у проекта его нет.
-func save(ctx context.Context, src Source, op string, q url.Values, path string, max int64) (hub.Saved, bool, error) {
-	t := path + tmp
-	f, err := os.OpenFile(t, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-	if err != nil {
-		return hub.Saved{}, false, err
-	}
-	s, err := src.Save(ctx, op, q, f, max)
-	cerr := f.Close()
-	if err == nil {
-		err = cerr
-	}
-	if err != nil {
-		_ = os.Remove(t)
-		return s, false, err
-	}
-	return s, put(t, path), nil
 }
 
 // MoveInto — папку src в dst. dst уже есть (тёзка в архиве, своя папка человека) — переносим по файлу; что не
@@ -254,13 +226,14 @@ func ReadVer(dir string) string {
 // Business — Excel, папки и фото одного бизнеса в dir. Версия не сменилась с прошлого раза (всё тогда записалось) —
 // ничего не спрашиваем. Ошибки ответов и диска — в res, дальше; нет связи или компьютер отключён — ошибка.
 // force — «Сохранить сейчас на всех» (хаб): проверить всё заново, даже если версия та же (вдруг файл удалили руками).
-func Business(ctx context.Context, src Source, b hub.Business, dir, today string, force bool, res *Result, progress func(string)) error {
+// d — диск: день, ключ шифрования, «Старые версии» (disk.go). Включили шифрование — бизнес проходим заново.
+func Business(ctx context.Context, src Source, b hub.Business, dir string, d *Disk, force bool, res *Result, progress func(string)) error {
 	name := b.Name
 	if name == "" {
 		name = b.Slug
 	}
-	prev := ReadVer(dir)
-	if !force && prev != "" && prev == b.Ver {
+	prev, ver := ReadVer(dir), b.Ver+d.tag()
+	if !force && prev != "" && prev == ver {
 		return nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -268,7 +241,7 @@ func Business(ctx context.Context, src Source, b hub.Business, dir, today string
 		return nil
 	}
 	before := res.failed + res.Locked
-	if err := Excel(ctx, src, b, dir, today, force || prev != b.Ver, res); err != nil {
+	if err := Excel(ctx, src, b, dir, d, force || prev != ver, res); err != nil {
 		return err
 	}
 	var groups struct {
@@ -290,7 +263,7 @@ func Business(ctx context.Context, src Source, b hub.Business, dir, today string
 				progress(name + ": " + s)
 			}
 		}
-		if _, err := SyncGroup(ctx, src, b.ID, dir, g, res, step); err != nil {
+		if _, err := SyncGroup(ctx, src, b.ID, dir, d, g, res, step); err != nil {
 			if Fatal(err) {
 				return err
 			}
@@ -299,7 +272,7 @@ func Business(ctx context.Context, src Source, b hub.Business, dir, today string
 	}
 	res.Businesses++
 	if res.failed+res.Locked == before && b.Ver != "" {
-		if err := writeHidden(filepath.Join(dir, BizVer), []byte(b.Ver)); err != nil {
+		if err := writeHidden(filepath.Join(dir, BizVer), []byte(ver)); err != nil {
 			res.Fail(name, err)
 		}
 	}
@@ -309,7 +282,7 @@ func Business(ctx context.Context, src Source, b hub.Business, dir, today string
 // Excel — файлы Excel бизнеса. Нет — скачать. Бизнес изменился (changed) — заново «что есть сейчас» и файлы с
 // refresh (текущий месяц, прибыль). Прошедшие дни и месяцы — только если файла нет. «Что есть сейчас» за прошлые дни
 // хранится 30 дней, как в Sarpo Business.
-func Excel(ctx context.Context, src Source, b hub.Business, dir, today string, changed bool, res *Result) error {
+func Excel(ctx context.Context, src Source, b hub.Business, dir string, d *Disk, changed bool, res *Result) error {
 	for _, f := range b.Files {
 		if f.Key == "" || !Ok(f.Name) || !strings.HasSuffix(strings.ToLower(f.Name), ".xlsx") || !(f.Folder == "" || Ok(f.Folder)) {
 			continue
@@ -319,14 +292,14 @@ func Excel(ctx context.Context, src Source, b hub.Business, dir, today string, c
 			folder = filepath.Join(dir, f.Folder)
 		}
 		path := filepath.Join(folder, f.Name)
-		if isFile(path) && !(changed && (f.Refresh || f.Key == "state")) {
+		if d.has(path) && !(changed && (f.Refresh || f.Key == "state")) {
 			continue
 		}
 		if err := os.MkdirAll(folder, 0o755); err != nil {
 			res.Fail(f.Name, err)
 			continue
 		}
-		_, ok, err := save(ctx, src, "excel", url.Values{"b": {strconv.Itoa(b.ID)}, "f": {f.Key}}, path, MaxExcel)
+		_, ok, err := d.save(ctx, src, "excel", url.Values{"b": {strconv.Itoa(b.ID)}, "f": {f.Key}}, path, MaxExcel)
 		switch {
 		case errors.Is(err, hub.ErrNothing):
 		case err != nil && Fatal(err):
@@ -348,19 +321,19 @@ func Excel(ctx context.Context, src Source, b hub.Business, dir, today string, c
 			if f.Folder != "" {
 				folder = filepath.Join(dir, f.Folder)
 			}
-			CleanupPrefix(folder, m[1], today, KeepDays)
+			CleanupPrefix(folder, m[1], d.Today, KeepDays)
 		}
 	}
 	return nil
 }
 
-// CleanupPrefix — файлы prefix+ГГГГ-ММ-ДД.xlsx старше days дней; другие не трогаем.
+// CleanupPrefix — файлы prefix+ГГГГ-ММ-ДД.xlsx (и они же под паролем, .xlsx.l7) старше days дней; другие не трогаем.
 func CleanupPrefix(dir, prefix, today string, days int) int {
 	t, err := time.Parse("2006-01-02", today)
 	if prefix == "" || err != nil {
 		return 0
 	}
-	re, err := regexp.Compile(`(?i)^` + regexp.QuoteMeta(prefix) + `(\d{4}-\d{2}-\d{2})\.xlsx$`)
+	re, err := regexp.Compile(`(?i)^` + regexp.QuoteMeta(prefix) + `(\d{4}-\d{2}-\d{2})\.xlsx(\.l7)?$`)
 	if err != nil {
 		return 0
 	}
@@ -480,7 +453,7 @@ func randHex() string {
 
 // SyncGroup — папки одного вида: кого нет в списке — в архив; переименованные — переименовать; новые и изменённые
 // (другая версия, пропал файл) — скачать пачками по 25; фото — по одному. Ответ — что лежит в папках.
-func SyncGroup(ctx context.Context, src Source, biz int, dir string, g Group, res *Result, progress func(string)) (map[string]*Kept, error) {
+func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g Group, res *Result, progress func(string)) (map[string]*Kept, error) {
 	root, archive := filepath.Join(dir, g.Folder), filepath.Join(dir, g.Archive)
 	manifest := filepath.Join(root, Manifest)
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -563,7 +536,7 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, g Group, re
 		}
 		missing := false
 		for _, f := range k.Files {
-			if !Ok(f) || !isFile(filepath.Join(root, k.Dir, f)) {
+			if !Ok(f) || !d.has(filepath.Join(root, k.Dir, f)) {
 				missing = true
 			}
 		}
@@ -609,20 +582,20 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, g Group, re
 		for _, id := range a.More {
 			more[id] = true
 		}
-		for _, d := range a.Items {
-			if !in[d.ID] || got[d.ID] {
+		for _, one := range a.Items {
+			if !in[one.ID] || got[one.ID] {
 				continue
 			}
-			got[d.ID] = true
-			k := kept[key(d.ID)]
+			got[one.ID] = true
+			k := kept[key(one.ID)]
 			folder := filepath.Join(root, k.Dir)
 			var written []string
 			all := true
-			for _, f := range d.Files {
+			for _, f := range one.Files {
 				if !Ok(f.Name) || !allowed[f.Name] {
 					continue
 				}
-				ok, err := write(filepath.Join(folder, f.Name), f.Data)
+				ok, err := d.write(filepath.Join(folder, f.Name), f.Data)
 				switch {
 				case err != nil:
 					all = false
@@ -636,7 +609,7 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, g Group, re
 				}
 			}
 			if all {
-				k.Ver, k.Files = byID[key(d.ID)].Ver, written
+				k.Ver, k.Files = byID[key(one.ID)].Ver, written
 			}
 			res.Items++
 		}
@@ -692,12 +665,12 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, g Group, re
 							continue // фото у проекта нет — не спрашиваем, пока не сменится версия
 						}
 						oldPath, want := filepath.Join(folder, oldFile), p.File+filepath.Ext(oldFile)
-						if Ok(oldFile) && isFile(oldPath) && !written[strings.ToLower(oldFile)] {
+						if Ok(oldFile) && d.has(oldPath) && !written[strings.ToLower(oldFile)] {
 							if oldFile == want {
 								continue
 							}
-							if !isFile(filepath.Join(folder, want)) || strings.EqualFold(want, oldFile) {
-								if os.Rename(oldPath, filepath.Join(folder, want)) == nil {
+							if find(filepath.Join(folder, want)) == "" || strings.EqualFold(want, oldFile) {
+								if rename(oldPath, filepath.Join(folder, want)) == nil {
 									k.Photos[p.Key] = p.Ver + "|" + want
 									written[strings.ToLower(want)] = true
 									continue
@@ -724,13 +697,13 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, g Group, re
 				continue
 			}
 			file := p.File + photoExt(s.Type)
-			ok, werr := write(filepath.Join(folder, file), buf.Bytes())
+			ok, werr := d.write(filepath.Join(folder, file), buf.Bytes())
 			switch {
 			case werr != nil:
 				res.Fail(g.Folder+" "+k.Dir, werr)
 			case ok:
 				if oldFile != "" && Ok(oldFile) && !strings.EqualFold(oldFile, file) {
-					_ = os.Remove(filepath.Join(folder, oldFile))
+					remove(filepath.Join(folder, oldFile))
 				}
 				k.Photos[p.Key] = p.Ver + "|" + file
 				written[strings.ToLower(file)] = true

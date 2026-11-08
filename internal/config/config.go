@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/little-7o7/little_7o7_hub/internal/fileseal"
 )
 
 // Copy — последняя копия проекта на этом компьютере.
@@ -50,6 +52,10 @@ type Config struct {
 	Files *Files `json:"files,omitempty"`
 	// Shortcuts — ярлыки в «Пуске» и на рабочем столе уже сделаны (делаем один раз: убранный ярлык не возвращаем).
 	Shortcuts bool `json:"shortcuts,omitempty"`
+	// Lock — открытый ключ шифрования файлов из пароля копий (от хаба; не секрет). nil — файлы пишутся открытыми.
+	Lock *fileseal.Lock `json:"lock,omitempty"`
+	// CheckedAt — когда последний раз проверяли копии баз (раз в неделю, RFC 3339).
+	CheckedAt string `json:"checkedAt,omitempty"`
 }
 
 // Store — config.json с замком: окно и фоновая работа меняют его из разных горутин.
