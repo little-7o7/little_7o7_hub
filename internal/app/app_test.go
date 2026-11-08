@@ -57,6 +57,11 @@ type fakeHub struct {
 	programs  string
 	assets    map[string]string
 	progAsked int
+	// code — ответ /api/pc/code ("" — 404), codeFiles — «<репозиторий>/<zip|excel>» → файл, codeAsked — сколько раз
+	// спросили список.
+	code      string
+	codeFiles map[string]string
+	codeAsked int
 }
 
 func (f *fakeHub) server(t *testing.T) *httptest.Server {
@@ -198,6 +203,26 @@ func (f *fakeHub) server(t *testing.T) *httptest.Server {
 			return
 		}
 		_, _ = w.Write([]byte(a))
+	}))
+	mux.HandleFunc("GET /api/pc/code", auth(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.codeAsked++
+		if f.code == "" {
+			w.WriteHeader(404)
+			return
+		}
+		_, _ = w.Write([]byte(f.code))
+	}))
+	mux.HandleFunc("GET /api/pc/code/{repo}/{what}", auth(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		b, ok := f.codeFiles[r.PathValue("repo")+"/"+r.PathValue("what")]
+		if !ok {
+			w.WriteHeader(404)
+			return
+		}
+		_, _ = w.Write([]byte(b))
 	}))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -456,8 +481,10 @@ func TestSyncFiles(t *testing.T) {
 			"sarpo/items?b=7&ids=1&kind=client": item,
 			"sarpo/backup?":                     copyFile,
 		},
-		programs: `{"programs":[{"dir":"Little Hub","name":"LittleHub-1.2.1-windows.exe","url":"/api/pc/asset/21","size":4},{"dir":"Little Hub","name":"Что нового 1.2.1.txt","text":"Что нового"}]}`,
-		assets:   map[string]string{"21": "MZ21"},
+		programs:  `{"programs":[{"dir":"Little Hub","name":"LittleHub-1.2.1-windows.exe","url":"/api/pc/asset/21","size":4},{"dir":"Little Hub","name":"Что нового 1.2.1.txt","text":"Что нового"}]}`,
+		assets:    map[string]string{"21": "MZ21"},
+		code:      `{"on":true,"repos":[{"name":"little_7o7","branch":"main","pushedAt":"2026-11-08T04:00:00Z"}]}`,
+		codeFiles: map[string]string{"little_7o7/excel": "xlsx-code"},
 	}
 	a, disk := newApp(t, f, &now)
 	if err := a.SyncFiles(context.Background()); err != nil {
@@ -485,8 +512,12 @@ func TestSyncFiles(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(disk, "Little Hub", "Программы", "Little Hub", "LittleHub-1.2.1-windows.exe")); string(b) != "MZ21" {
 		t.Fatal("нет установщика в «Программах»")
 	}
+	// «Код»: Excel репозитория (архива нет — репозиторий пустой).
+	if b, _ := os.ReadFile(filepath.Join(disk, "Little Hub", "Код", "little_7o7", "little_7o7.xlsx")); string(b) != "xlsx-code" {
+		t.Fatal("нет Excel репозитория в «Коде»")
+	}
 	report, _ := os.ReadFile(filepath.Join(disk, "Little Hub", TodayFile))
-	for _, want := range []string{"что сохранилось сегодня, 08.11.2026", "• Хаб — ", "• Sarpo Business: файлов ", "• Программы: файлов 2", "не подключён"} {
+	for _, want := range []string{"что сохранилось сегодня, 08.11.2026", "• Хаб — ", "• Sarpo Business: файлов ", "• Программы: файлов 2", "• Код: файлов 1", "не подключён"} {
 		if !strings.Contains(string(report), want) {
 			t.Fatalf("в отчёте дня нет %q:\n%s", want, report)
 		}
@@ -514,10 +545,10 @@ func TestSyncFiles(t *testing.T) {
 	}
 	// «Программы» — раз в день; счёт дня копится, в новый день — с нуля.
 	f.mu.Lock()
-	progAsked := f.progAsked
+	progAsked, codeAsked := f.progAsked, f.codeAsked
 	f.mu.Unlock()
-	if progAsked != 1 {
-		t.Fatal("«Программы» спрошены не раз в день:", progAsked)
+	if progAsked != 1 || codeAsked != 1 {
+		t.Fatal("«Программы» и «Код» спрошены не раз:", progAsked, codeAsked)
 	}
 	if td := a.Cfg.Get().Today; td == nil || td.Day != "2026-11-08" || td.Programs != 2 || td.Projects["sarpo"].Files < 2 {
 		t.Fatalf("счёт дня: %+v", td)

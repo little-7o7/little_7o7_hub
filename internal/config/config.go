@@ -59,6 +59,8 @@ type Config struct {
 	CheckedAt string `json:"checkedAt,omitempty"`
 	// ProgramsDay — день (по Ташкенту), когда «Программы» разложены без ошибок: раз в день.
 	ProgramsDay string `json:"programsDay,omitempty"`
+	// CodeAt — когда «Код» разложен без ошибок (RFC 3339): раз в 3 часа.
+	CodeAt string `json:"codeAt,omitempty"`
 	// Today — что записано за сегодня (по Ташкенту): для «Что сохранилось сегодня.txt».
 	Today *Today `json:"today,omitempty"`
 }
@@ -68,6 +70,7 @@ type Today struct {
 	Day      string              `json:"day"`
 	Projects map[string]DayCount `json:"projects"`
 	Programs int                 `json:"programs,omitempty"`
+	Code     int                 `json:"code,omitempty"`
 }
 
 // DayCount — файлов, папок, фото и «Фото базы» записано за день.
