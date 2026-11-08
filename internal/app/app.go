@@ -18,16 +18,22 @@ import (
 	"github.com/little-7o7/little_7o7_hub/internal/copyfmt"
 	"github.com/little-7o7/little_7o7_hub/internal/days"
 	"github.com/little-7o7/little_7o7_hub/internal/disks"
+	"github.com/little-7o7/little_7o7_hub/internal/files"
 	"github.com/little-7o7/little_7o7_hub/internal/hub"
 	"github.com/little-7o7/little_7o7_hub/internal/rates"
 	"github.com/little-7o7/little_7o7_hub/internal/secret"
 	"github.com/little-7o7/little_7o7_hub/internal/update"
 )
 
-// HubProject — копия базы самого хаба. Проекты (Sarpo, Strassio) добавятся в этапах 2 и 3.
+// HubProject — копия базы самого хаба. Копии и файлы проектов (Sarpo) — SyncFiles.
 var HubProject = days.Project{Slug: "hub", Folder: "Хаб", Ext: "l7copy"}
 
 const (
+	// Файлы проектов: днём (8:00–22:00 по Ташкенту) — раз в 30 минут, ночью — раз в 3 часа; бизнес, где ничего не
+	// менялось, проект не спрашиваем.
+	FilesDay     = 30 * time.Minute
+	FilesNight   = 3 * time.Hour
+	filesCheck   = 5 * time.Minute
 	FlagEvery    = 2 * time.Minute
 	UpdateEvery  = 6 * time.Hour
 	StatusEvery  = 3 * time.Hour
@@ -63,6 +69,10 @@ type App struct {
 	updateErr string
 	log       []LogLine
 	kick      chan struct{}
+
+	filesBusy bool
+	filesTry  time.Time
+	filesStep string
 }
 
 type LogLine struct {
@@ -288,6 +298,168 @@ func (a *App) copyHub(ctx context.Context) error {
 	return nil
 }
 
+// FilesDue — пора ли раскладывать файлы проектов: днём раз в 30 минут, ночью раз в 3 часа.
+func FilesDue(last, now time.Time) bool {
+	if last.IsZero() {
+		return true
+	}
+	h := now.In(days.Tashkent).Hour()
+	every := FilesNight
+	if h >= 8 && h < 22 {
+		every = FilesDay
+	}
+	return now.Sub(last) >= every
+}
+
+// SyncFiles — файлы всех проектов на активный диск: Excel, папки клиентов, поставщиков, мастеров, товаров с фото, и
+// копия базы проекта. Уже идёт — ничего.
+func (a *App) SyncFiles(ctx context.Context) error {
+	a.mu.Lock()
+	if a.filesBusy {
+		a.mu.Unlock()
+		return nil
+	}
+	a.filesBusy, a.filesTry = true, a.now()
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		a.filesBusy, a.filesStep = false, ""
+		a.mu.Unlock()
+	}()
+	err := a.syncFiles(ctx)
+	if err != nil {
+		a.Logf(true, "Файлы проектов: %v", err)
+	}
+	return err
+}
+
+func (a *App) step(s string) {
+	a.mu.Lock()
+	a.filesStep = s
+	a.mu.Unlock()
+}
+
+func (a *App) syncFiles(ctx context.Context) error {
+	c, err := a.client()
+	if err != nil {
+		return err
+	}
+	list, err := c.Projects(ctx)
+	if err != nil {
+		return err
+	}
+	cfg := a.Cfg.Get()
+	_, active, err := disks.Check(cfg.Disks, a.Space)
+	if err != nil {
+		return err
+	}
+	root := disks.Root(active)
+	now := a.now()
+	today := days.Today(now)
+	state := &config.Files{At: now.UTC().Format(time.RFC3339), Disk: active, Projects: map[string]config.ProjectFiles{}}
+	if cfg.Files != nil && cfg.Files.Disk == active {
+		for k, v := range cfg.Files.Projects {
+			state.Projects[k] = v
+		}
+	}
+	var stop error
+	for _, p := range list {
+		if stop != nil || !files.SlugRe.MatchString(p.Slug) || !files.Ok(p.Folder) {
+			continue
+		}
+		res := &files.Result{Errors: []string{}}
+		if !p.OK {
+			// Проект не подключён или не ответил: его папку не трогаем, прежний итог оставляем с причиной.
+			prev := state.Projects[p.Slug]
+			prev.Errors = []string{"Проект не ответил: " + p.Error}
+			state.Projects[p.Slug] = prev
+			continue
+		}
+		src := files.Of(c, p.Slug)
+		dir := filepath.Join(root, p.Folder)
+		for _, b := range p.Businesses {
+			if !files.SlugRe.MatchString(b.Slug) {
+				continue
+			}
+			if err := files.Business(ctx, src, b, filepath.Join(dir, b.Slug), today, res, a.step); err != nil {
+				stop = err
+				break
+			}
+		}
+		if stop == nil && p.Copy {
+			stop = a.projectCopy(ctx, src, p, root, res)
+		}
+		state.Projects[p.Slug] = config.ProjectFiles{Businesses: res.Businesses, Files: res.Files, Items: res.Items, Photos: res.Photos, Locked: res.Locked, Errors: res.Errors}
+		if res.Files+res.Photos > 0 || len(res.Errors) > 0 {
+			a.Logf(len(res.Errors) > 0, "%s: файлов %d, папок %d, фото %d%s%s", p.Folder, res.Files, res.Items, res.Photos, lockedNote(res.Locked), errNote(res.Errors))
+		}
+	}
+	if err := a.Cfg.Update(func(x *config.Config) { x.Files = state }); err != nil {
+		return err
+	}
+	if stop == nil {
+		a.SendStatus(ctx)
+	}
+	return stop
+}
+
+func lockedNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", открыты в Excel и не обновились: %d", n)
+}
+
+func errNote(es []string) string {
+	if len(es) == 0 {
+		return ""
+	}
+	return "; ошибки: " + strings.Join(es, "; ")
+}
+
+// projectCopy — копия базы проекта (Sarpo — ночная) в «<проект>/Копии базы/…» под паролем копий.
+func (a *App) projectCopy(ctx context.Context, src files.Source, p hub.FileProject, root string, res *files.Result) error {
+	proj := days.Project{Slug: p.Slug, Folder: p.Folder, Ext: "l7copy"}
+	cfg := a.Cfg.Get()
+	prev := cfg.Copies[p.Slug]
+	havePath := ""
+	if prev.Day != "" {
+		if rel, err := days.Rel(proj, prev.Day); err == nil {
+			havePath = filepath.Join(root, rel)
+		}
+	}
+	a.step(p.Folder + ": копия базы")
+	cp, err := files.ProjectCopy(ctx, src, proj, root, prev.Version, havePath)
+	switch {
+	case errors.Is(err, hub.ErrNothing):
+		return nil
+	case errors.Is(err, hub.ErrNoPassword):
+		res.Fail("Копия базы", err)
+		return nil
+	case err != nil && files.Fatal(err):
+		return err
+	case err != nil:
+		res.Fail("Копия базы", err)
+		return nil
+	}
+	now := a.now()
+	if err := a.Cfg.Update(func(x *config.Config) {
+		x.Copies[p.Slug] = config.Copy{Day: cp.Day, At: now.UTC().Format(time.RFC3339), Bytes: cp.Bytes, Version: cp.Name, Disk: filepath.Dir(root)}
+	}); err != nil {
+		return err
+	}
+	a.Logf(false, "Копия базы %s за %s сохранена: %s", p.Folder, cp.Day, cp.Path)
+	return nil
+}
+
+// goFiles — файлы проектов в фоне: копия хаба и курсы не ждут, пока скачиваются папки.
+func (a *App) goFiles(ctx context.Context) {
+	if !a.Paired() {
+		return
+	}
+	go func() { _ = a.SyncFiles(ctx) }()
+}
+
 // Status — что отправить хабу о себе.
 func (a *App) Status() hub.Status {
 	cfg := a.Cfg.Get()
@@ -313,7 +485,11 @@ func (a *App) Status() hub.Status {
 	for _, d := range st {
 		ds = append(ds, map[string]any{"path": d.Path, "free": d.Free, "total": d.Total, "active": d.Active, "ok": d.OK})
 	}
-	return hub.Status{Version: a.Version, OS: runtime.GOOS, Disks: ds, Copies: copies, Error: e}
+	st2 := hub.Status{Version: a.Version, OS: runtime.GOOS, Disks: ds, Copies: copies, Error: e}
+	if cfg.Files != nil {
+		st2.Files = cfg.Files
+	}
+	return st2
 }
 
 // SendStatus — сообщить хабу о себе (версия, диски, копии).
@@ -467,6 +643,8 @@ func (a *App) Run(ctx context.Context) {
 	defer updT.Stop()
 	statT := time.NewTicker(StatusEvery)
 	defer statT.Stop()
+	filesT := time.NewTicker(filesCheck)
+	defer filesT.Stop()
 	first := time.After(time.Minute)
 	a.mu.Lock()
 	if a.kick == nil {
@@ -482,6 +660,13 @@ func (a *App) Run(ctx context.Context) {
 			if a.Paired() && a.CopyHub(ctx) == nil {
 				a.SendStatus(ctx)
 			}
+			a.mu.Lock()
+			started := !a.filesTry.IsZero()
+			a.mu.Unlock()
+			// Первый запуск — файлы через минуту (вместе с курсами), дальше «Сохранить сейчас» — и файлы тоже.
+			if started {
+				a.goFiles(ctx)
+			}
 		case <-flagT.C:
 			a.tick(ctx)
 		case <-first:
@@ -489,6 +674,14 @@ func (a *App) Run(ctx context.Context) {
 				_ = a.SendRates(ctx)
 				a.SendStatus(ctx)
 				_ = a.CheckUpdate(ctx)
+				a.goFiles(ctx)
+			}
+		case <-filesT.C:
+			a.mu.Lock()
+			due := FilesDue(a.filesTry, a.now())
+			a.mu.Unlock()
+			if due {
+				a.goFiles(ctx)
 			}
 		case <-rateT.C:
 			if a.Paired() {
@@ -527,12 +720,15 @@ type View struct {
 	Suggest   []string               `json:"suggest"`
 	Log       []LogLine              `json:"log"`
 	Lang      string                 `json:"lang"`
+	Files     *config.Files          `json:"files,omitempty"`
+	FilesBusy bool                   `json:"filesBusy"`
+	FilesStep string                 `json:"filesStep,omitempty"`
 }
 
 func (a *App) View() View {
 	cfg := a.Cfg.Get()
 	st, _, derr := disks.Check(cfg.Disks, a.Space)
-	v := View{Version: a.Version, Paired: a.Paired(), Hub: cfg.Hub, Name: cfg.Name, Disks: st, Copies: cfg.Copies, Today: days.Today(a.now()), RatesAt: cfg.RatesAt, Lang: cfg.Lang}
+	v := View{Version: a.Version, Paired: a.Paired(), Hub: cfg.Hub, Name: cfg.Name, Disks: st, Copies: cfg.Copies, Today: days.Today(a.now()), RatesAt: cfg.RatesAt, Lang: cfg.Lang, Files: cfg.Files}
 	if derr != nil {
 		v.DiskError = derr.Error()
 	}
@@ -548,6 +744,7 @@ func (a *App) View() View {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	v.Latest, v.UpdateErr, v.Revoked, v.NoPass, v.Busy, v.Error = a.latest, a.updateErr, a.revoked, a.noPass, a.busy, a.lastErr
+	v.FilesBusy, v.FilesStep = a.filesBusy, a.filesStep
 	if w := a.deb.Waiting(); !w.IsZero() {
 		v.Waiting = w.UTC().Format(time.RFC3339)
 	}

@@ -223,6 +223,7 @@ type Status struct {
 	Disks   any            `json:"disks"`
 	Copies  map[string]any `json:"copies,omitempty"`
 	Error   *string        `json:"error"`
+	Files   any            `json:"files,omitempty"`
 }
 
 func (c *Client) SendStatus(ctx context.Context, s Status) error {

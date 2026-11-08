@@ -64,6 +64,26 @@ func Check(b []byte) error {
 	return nil
 }
 
+// HeadLen — сколько первых байт файла нужно CheckHead.
+const HeadLen = 11 + 16 + 4 + 16
+
+// CheckHead — то же, что Check, по первым байтам и размеру файла (большую копию проекта не читаем в память целиком).
+func CheckHead(head []byte, size int64) error {
+	m := magicOf(head)
+	if m == nil || len(head) < len(m)+16+4 {
+		return ErrNotCopy
+	}
+	h := int64(len(m) + 16 + 4 + 16)
+	if size < h+16+32 || (size-h-32)%aes.BlockSize != 0 {
+		return ErrNotCopy
+	}
+	n := binary.BigEndian.Uint32(head[len(m)+16:])
+	if n < minIter || n > maxIter {
+		return ErrNotCopy
+	}
+	return nil
+}
+
 // Open — расшифровать паролем. Внутри gzip (так делают хаб и Sarpo) — распаковываем.
 func Open(b []byte, password string) ([]byte, error) {
 	if err := Check(b); err != nil {

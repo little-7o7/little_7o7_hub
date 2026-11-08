@@ -13,6 +13,8 @@ const T = {
     sentAt: "Отправлены", never: "ещё не отправлялись", ok: "принят", revoked: "Компьютер отключён в хабе. Подключите его заново кодом.",
     noPass: "В хабе не задан пароль копий: Настройки → Компьютеры → «Пароль копий».", saving: "Сохраняю…", version: "Версия", update: "Новая версия {v} — поставится сама",
     paired: "Подключён: {n} · {h}", notPaired: "Не подключён", decDone: "Готово: файл скачан", lastErr: "Ошибка", busy: "Сохраняю копию…",
+    filesTitle: "Файлы проектов", filesText: "Excel, папки клиентов, поставщиков, мастеров и товаров с фото — в папке «Little Hub» на диске.",
+    filesNone: "Ещё не раскладывались", filesBusy: "Раскладываю…", filesLine: "{t} · бизнесов {b} · записано файлов {f} · папок {i} · фото {p}", locked: "Открыты в Excel и не обновились: {n}",
   },
   en: {
     pairTitle: "Connect to the hub", pairText: "Hub → Settings → Computers → “Add computer”. Type the code from there.", pairBtn: "Connect",
@@ -25,6 +27,8 @@ const T = {
     sentAt: "Sent", never: "not sent yet", ok: "accepted", revoked: "This computer was disconnected in the hub. Connect it again with a code.",
     noPass: "No backup password in the hub: Settings → Computers → “Backup password”.", saving: "Saving…", version: "Version", update: "New version {v} — installs by itself",
     paired: "Connected: {n} · {h}", notPaired: "Not connected", decDone: "Done: file downloaded", lastErr: "Error", busy: "Saving a copy…",
+    filesTitle: "Project files", filesText: "Excel, folders of clients, suppliers, masters and products with photos — in the “Little Hub” folder on the disk.",
+    filesNone: "Not laid out yet", filesBusy: "Laying out…", filesLine: "{t} · businesses {b} · files written {f} · folders {i} · photos {p}", locked: "Open in Excel and not updated: {n}",
   },
 };
 
@@ -83,10 +87,32 @@ function render(s) {
 
   const c = $("copies");
   c.replaceChildren();
-  const hub = s.copies && s.copies.hub;
-  c.append(
-    el("li", {}, el("strong", {}, t("hub")), hub ? el("span", { class: "muted" }, `${hub.day === s.today ? t("today") : hub.day} · ${time(hub.at)} · ${size(hub.bytes)}`) : el("span", { class: "muted" }, t("noCopy"))),
-  );
+  const NAMES = { hub: t("hub"), sarpo: "Sarpo Business", strassio: "Strassio" };
+  const line = (k, x) => el("li", {}, el("strong", {}, NAMES[k] || k), x ? el("span", { class: "muted" }, `${x.day === s.today ? t("today") : x.day} · ${time(x.at)} · ${size(x.bytes)}`) : el("span", { class: "muted" }, t("noCopy")));
+  c.append(line("hub", s.copies && s.copies.hub));
+  Object.keys(s.copies || {}).filter((k) => k !== "hub").sort().forEach((k) => c.append(line(k, s.copies[k])));
+
+  const fl = $("files");
+  fl.replaceChildren();
+  $("filesStep").textContent = s.filesBusy ? `${t("filesBusy")} ${s.filesStep || ""}` : "";
+  const fs = s.files && s.files.projects ? Object.entries(s.files.projects) : [];
+  if (!fs.length) fl.append(el("li", {}, el("span", { class: "muted" }, t("filesNone"))));
+  fs.forEach(([k, p]) => {
+    fl.append(
+      el(
+        "li",
+        {},
+        el(
+          "div",
+          { class: "disk" },
+          el("strong", {}, NAMES[k] || k),
+          el("p", { class: "muted small" }, t("filesLine", { t: time(s.files.at), b: p.businesses, f: p.files, i: p.items, p: p.photos })),
+          p.locked ? el("p", { class: "small" }, t("locked", { n: p.locked })) : null,
+          ...(p.errors || []).map((e) => el("p", { class: "err small" }, e)),
+        ),
+      ),
+    );
+  });
   $("saveNow").disabled = !s.paired || s.busy;
   $("saveNow").textContent = s.busy ? t("saving") : t("saveNow");
   $("waiting").hidden = !s.waiting;

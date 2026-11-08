@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +36,10 @@ type fakeHub struct {
 	revoked bool
 	paired  bool
 	sources string
+	// Файлы проектов: ответ /api/pc/projects и ответы /api/pc/p/<проект>/<что>?… по «что?запрос».
+	projects string
+	answers  map[string]string
+	asked    []string
 }
 
 func (f *fakeHub) server(t *testing.T) *httptest.Server {
@@ -100,6 +105,29 @@ func (f *fakeHub) server(t *testing.T) *httptest.Server {
 		f.rates += len(b.Items)
 		f.mu.Unlock()
 		_, _ = w.Write([]byte(`{"results":[{"source":"cbu","ok":true,"day":"2026-11-08"},{"source":"nbu","ok":false,"error":"далеко"}]}`))
+	}))
+	mux.HandleFunc("GET /api/pc/projects", auth(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		_, _ = w.Write([]byte(f.projects))
+	}))
+	mux.HandleFunc("GET /api/pc/p/{slug}/{op}", auth(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		k := r.PathValue("slug") + "/" + r.PathValue("op") + "?" + r.URL.RawQuery
+		f.asked = append(f.asked, k)
+		a, ok := f.answers[k]
+		if !ok {
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"error":"нет"}`))
+			return
+		}
+		if strings.HasPrefix(k, "sarpo/backup") {
+			w.Header().Set("X-Copy-Name", "sarpo-2026-11-07.sql.gz")
+			w.Header().Set("X-Copy-Day", "2026-11-07")
+			w.Header().Set("X-Copy-Bytes", strconv.Itoa(len(a)))
+		}
+		_, _ = w.Write([]byte(a))
 	}))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -344,4 +372,73 @@ func (r rewrite) RoundTrip(req *http.Request) (*http.Response, error) {
 	u := *req.URL
 	n, _ := http.NewRequest(req.Method, r.to+u.Path, nil)
 	return http.DefaultTransport.RoundTrip(n)
+}
+
+func TestSyncFiles(t *testing.T) {
+	now := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+	copyFile := string(sample(t))
+	item := `{"items":[{"id":1,"files":[{"name":"Всё о клиенте.xlsx","data":"eA=="}]}],"more":[]}`
+	f := &fakeHub{
+		projects: `{"projects":[{"slug":"sarpo","folder":"Sarpo Business","copy":true,"ok":true,"businesses":[{"id":7,"slug":"sarpotextile","name":"Sarpo Textile","kind":"shop","full":true,"ver":"v1","files":[{"key":"state","folder":"Excel","name":"Магазин-2026-11-08.xlsx","refresh":false}]}]},{"slug":"strassio","folder":"Strassio","copy":false,"ok":false,"error":"не подключён","businesses":[]}]}`,
+		answers: map[string]string{
+			"sarpo/excel?b=7&f=state":           "xlsx",
+			"sarpo/items?b=7":                   `{"groups":[{"kind":"client","folder":"Клиенты","archive":"Клиенты (архив)","files":["Всё о клиенте.xlsx"],"items":[{"id":1,"dir":"Ахмед","ver":"1"}]}]}`,
+			"sarpo/items?b=7&ids=1&kind=client": item,
+			"sarpo/backup?":                     copyFile,
+		},
+	}
+	a, disk := newApp(t, f, &now)
+	if err := a.SyncFiles(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	biz := filepath.Join(disk, "Little Hub", "Sarpo Business", "sarpotextile")
+	if b, _ := os.ReadFile(filepath.Join(biz, "Excel", "Магазин-2026-11-08.xlsx")); string(b) != "xlsx" {
+		t.Fatal("нет Excel")
+	}
+	if b, _ := os.ReadFile(filepath.Join(biz, "Клиенты", "Ахмед", "Всё о клиенте.xlsx")); string(b) != "x" {
+		t.Fatal("нет папки клиента")
+	}
+	cp := filepath.Join(disk, "Little Hub", "Sarpo Business", "Копии базы", "2026-11", "sarpo-2026-11-07.l7copy")
+	if b, _ := os.ReadFile(cp); string(b) != copyFile {
+		t.Fatal("нет копии базы Sarpo")
+	}
+	cfg := a.Cfg.Get()
+	if cfg.Copies["sarpo"].Version != "sarpo-2026-11-07.sql.gz" || cfg.Files == nil || cfg.Files.Projects["sarpo"].Files < 2 || cfg.Files.Projects["sarpo"].Businesses != 1 {
+		t.Fatalf("итог: %+v %+v", cfg.Copies["sarpo"], cfg.Files)
+	}
+	if es := cfg.Files.Projects["strassio"].Errors; len(es) != 1 || !strings.Contains(es[0], "не подключён") {
+		t.Fatalf("неподключённый проект: %+v", cfg.Files.Projects["strassio"])
+	}
+	// Хабу ушло состояние с файлами.
+	f.mu.Lock()
+	last := f.status[len(f.status)-1]
+	f.mu.Unlock()
+	if _, ok := last["files"]; !ok {
+		t.Fatal("в состоянии нет файлов")
+	}
+	// Второй раз: та же версия бизнеса — проект не спрашиваем; копия та же — have.
+	f.mu.Lock()
+	f.asked = nil
+	f.answers["sarpo/backup?have=sarpo-2026-11-07.sql.gz"] = ""
+	f.mu.Unlock()
+	if err := a.SyncFiles(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	asked := append([]string(nil), f.asked...)
+	f.mu.Unlock()
+	if len(asked) != 1 || asked[0] != "sarpo/backup?have=sarpo-2026-11-07.sql.gz" {
+		t.Fatalf("спрошено: %v", asked)
+	}
+}
+
+func TestFilesDue(t *testing.T) {
+	day := time.Date(2026, 11, 8, 7, 0, 0, 0, time.UTC)    // 12:00 в Ташкенте
+	night := time.Date(2026, 11, 8, 20, 0, 0, 0, time.UTC) // 01:00
+	if !FilesDue(time.Time{}, day) || FilesDue(day.Add(-29*time.Minute), day) || !FilesDue(day.Add(-30*time.Minute), day) {
+		t.Fatal("днём — раз в 30 минут")
+	}
+	if FilesDue(night.Add(-2*time.Hour), night) || !FilesDue(night.Add(-3*time.Hour), night) {
+		t.Fatal("ночью — раз в 3 часа")
+	}
 }

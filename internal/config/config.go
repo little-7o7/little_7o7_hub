@@ -19,6 +19,23 @@ type Copy struct {
 	Disk    string `json:"disk,omitempty"`
 }
 
+// ProjectFiles — файлы проекта на этом компьютере в последний раз (Excel, папки, фото).
+type ProjectFiles struct {
+	Businesses int      `json:"businesses"`
+	Files      int      `json:"files"`
+	Items      int      `json:"items"`
+	Photos     int      `json:"photos"`
+	Locked     int      `json:"locked"`
+	Errors     []string `json:"errors"`
+}
+
+// Files — когда последний раз раскладывали файлы проектов и что вышло.
+type Files struct {
+	At       string                  `json:"at"`
+	Disk     string                  `json:"disk,omitempty"`
+	Projects map[string]ProjectFiles `json:"projects"`
+}
+
 type Config struct {
 	Hub      string          `json:"hub"`            // https://little-7o7.vercel.app
 	Flag     string          `json:"flag,omitempty"` // /api/pc/flag/<ключ>
@@ -29,6 +46,8 @@ type Config struct {
 	Lang     string          `json:"lang,omitempty"`
 	// RatesAt — когда курсы последний раз ушли в хаб (RFC 3339).
 	RatesAt string `json:"ratesAt,omitempty"`
+	// Files — файлы проектов (Excel, папки клиентов, поставщиков, мастеров, товаров с фото).
+	Files *Files `json:"files,omitempty"`
 }
 
 // Store — config.json с замком: окно и фоновая работа меняют его из разных горутин.
