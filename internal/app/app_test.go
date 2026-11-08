@@ -426,7 +426,7 @@ func TestSyncFiles(t *testing.T) {
 		projects: `{"projects":[{"slug":"sarpo","folder":"Sarpo Business","copy":true,"ok":true,"businesses":[{"id":7,"slug":"sarpotextile","name":"Sarpo Textile","kind":"shop","full":true,"ver":"v1","files":[{"key":"state","folder":"Excel","name":"Магазин-2026-11-08.xlsx","refresh":false}]}]},{"slug":"strassio","folder":"Strassio","copy":false,"ok":false,"error":"не подключён","businesses":[]}]}`,
 		answers: map[string]string{
 			"sarpo/excel?b=7&f=state":           "xlsx",
-			"sarpo/items?b=7":                   `{"groups":[{"kind":"client","folder":"Клиенты","archive":"Клиенты (архив)","files":["Всё о клиенте.xlsx"],"items":[{"id":1,"dir":"Ахмед","ver":"1"}]}]}`,
+			"sarpo/items?arch=1&b=7":            `{"groups":[{"kind":"client","folder":"Клиенты","archive":"Клиенты (архив)","files":["Всё о клиенте.xlsx"],"items":[{"id":1,"dir":"Ахмед","ver":"1"}]}]}`,
 			"sarpo/items?b=7&ids=1&kind=client": item,
 			"sarpo/backup?":                     copyFile,
 		},
@@ -494,9 +494,9 @@ func TestSyncFilesRoot(t *testing.T) {
 		projects: `{"projects":[{"slug":"strassio","folder":"Strassio","copy":false,"ok":true,"businesses":[{"id":1,"slug":"strassio","name":"Strassio","kind":"plugin","full":true,"root":true,"ver":"v1","files":[{"key":"keys","folder":"","name":"Ключи.xlsx","refresh":true}]}]}]}`,
 		answers: map[string]string{
 			"strassio/excel?b=1&f=keys":            "keys",
-			"strassio/items?b=1":                   `{"groups":[{"kind":"client","folder":"Клиенты","archive":"Клиенты (архив)","files":["Всё о клиенте.xlsx"],"items":[{"id":5,"dir":"Ахмед","ver":"1","photos":[{"key":"c9","file":"Договор №1","ver":"9"}]}]}]}`,
+			"strassio/items?arch=1&b=1":            `{"groups":[{"kind":"client","folder":"Клиенты","archive":"Клиенты (архив)","files":["Всё о клиенте.xlsx"],"items":[{"id":5,"dir":"Ахмед","ver":"1","photos":[{"key":"c9","file":"Договор №1","ver":"9"}]}]}]}`,
 			"strassio/items?b=1&ids=5&kind=client": `{"items":[{"id":5,"files":[{"name":"Всё о клиенте.xlsx","data":"eA=="}]}],"more":[]}`,
-			"strassio/photo?b=1&c=9&p=5":           "%PDF-1.4",
+			"strassio/photo?b=1&c=9&link=1&p=5":    "%PDF-1.4",
 		},
 	}
 	a, disk := newApp(t, f, &now)

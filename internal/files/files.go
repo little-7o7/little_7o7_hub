@@ -6,7 +6,8 @@
 //	<диск>/Little Hub/Sarpo Business/<бизнес>/  — Excel («что есть сейчас», дни, месяцы, прибыль),
 //	                                             Товары/<товар>/ (о товаре, фото товара и цветов),
 //	                                             Клиенты/, Поставщики/, Мастера/ — папка на каждого,
-//	                                             «… (архив)» — кого больше нет в списке.
+//	                                             «… (архив)» — архивные у проекта и кого больше нет в списке,
+//	                                             Фото базы/ — чеки операций, паспорта, поломки (media.go).
 //
 // Что и куда класть, решает проект; программа скачивает только новое и изменённое: версии папок хранит в скрытом
 // .littlehub.json, версию бизнеса — в .littlehub-ver (не сменилась — бизнес не спрашиваем). Человек кладёт в папку
@@ -52,6 +53,7 @@ type Result struct {
 	Files      int      `json:"files"`
 	Items      int      `json:"items"`
 	Photos     int      `json:"photos"`
+	Media      int      `json:"media"`
 	Locked     int      `json:"locked"`
 	Errors     []string `json:"errors"`
 	failed     int
@@ -73,6 +75,8 @@ func (r *Result) Fail(what string, err error) {
 type Source interface {
 	JSON(ctx context.Context, op string, q url.Values, out any) error
 	Save(ctx context.Context, op string, q url.Values, w io.Writer, max int64) (hub.Saved, error)
+	// Fetch — файл из хранилища проекта по ссылке, которую дал проект (оригинал фото, «Фото базы»).
+	Fetch(ctx context.Context, link string, w io.Writer, max int64) (hub.Saved, error)
 }
 
 type project struct {
@@ -85,6 +89,9 @@ func (p project) JSON(ctx context.Context, op string, q url.Values, out any) err
 }
 func (p project) Save(ctx context.Context, op string, q url.Values, w io.Writer, max int64) (hub.Saved, error) {
 	return p.c.ProjectSave(ctx, p.slug, op, q, w, max)
+}
+func (p project) Fetch(ctx context.Context, link string, w io.Writer, max int64) (hub.Saved, error) {
+	return p.c.BlobFile(ctx, link, w, max)
 }
 
 // Of — ответы проекта slug через хаб.
@@ -247,21 +254,22 @@ func Business(ctx context.Context, src Source, b hub.Business, dir string, d *Di
 	var groups struct {
 		Groups []Group `json:"groups"`
 	}
-	if err := src.JSON(ctx, "items", url.Values{"b": {strconv.Itoa(b.ID)}}, &groups); err != nil {
+	// arch=1 — и архивные (товары, клиенты…): проект отмечает их arch, программа кладёт их в «… (архив)».
+	if err := src.JSON(ctx, "items", url.Values{"b": {strconv.Itoa(b.ID)}, "arch": {"1"}}, &groups); err != nil {
 		if Fatal(err) {
 			return err
 		}
 		res.Fail(name, err)
 		return nil
 	}
-	for _, g := range groups.Groups {
-		if g.Kind == "" || g.Files == nil || !Ok(g.Folder) || !Ok(g.Archive) {
-			continue
+	step := func(s string) {
+		if progress != nil {
+			progress(name + ": " + s)
 		}
-		step := func(s string) {
-			if progress != nil {
-				progress(name + ": " + s)
-			}
+	}
+	for _, g := range groups.Groups {
+		if g.Kind == "" || g.Files == nil || !Ok(g.Folder) || !Ok(g.Archive) || strings.EqualFold(g.Folder, g.Archive) {
+			continue
 		}
 		if _, err := SyncGroup(ctx, src, b.ID, dir, d, g, res, step); err != nil {
 			if Fatal(err) {
@@ -269,6 +277,12 @@ func Business(ctx context.Context, src Source, b hub.Business, dir string, d *Di
 			}
 			res.Fail(name+", "+g.Folder, err)
 		}
+	}
+	if err := Media(ctx, src, b.ID, dir, d, force, res, step); err != nil {
+		if Fatal(err) {
+			return err
+		}
+		res.Fail(name+", "+MediaFolder, err)
 	}
 	res.Businesses++
 	if res.failed+res.Locked == before && b.Ver != "" {
@@ -367,10 +381,12 @@ type Photo struct {
 	Ver  string `json:"ver"`
 }
 
+// Item — папка: Arch — у проекта в архиве (товар, клиент…), лежит в «… (архив)».
 type Item struct {
 	ID     int     `json:"id"`
 	Dir    string  `json:"dir"`
 	Ver    string  `json:"ver"`
+	Arch   bool    `json:"arch,omitempty"`
 	Photos []Photo `json:"photos,omitempty"`
 }
 
@@ -383,9 +399,10 @@ type Group struct {
 	Items   []Item   `json:"items"`
 }
 
-// Kept — что лежит в папке: имя, версия, файлы проекта, фото (ключ → «версия|файл»).
+// Kept — что лежит в папке: имя, где (Arch — в «… (архив)»), версия, файлы проекта, фото (ключ → «версия|файл»).
 type Kept struct {
 	Dir    string            `json:"dir"`
+	Arch   bool              `json:"arch,omitempty"`
 	Ver    string            `json:"ver"`
 	Files  []string          `json:"files,omitempty"`
 	Photos map[string]string `json:"photos,omitempty"`
@@ -441,20 +458,33 @@ func photoExt(t string) string {
 		return ".webp"
 	case "image/gif":
 		return ".gif"
+	case "image/heic", "image/heif":
+		return ".heic"
 	case "application/pdf":
 		return ".pdf"
 	}
 	return ".jpg"
 }
 
+func isJSON(t string) bool {
+	return strings.EqualFold(strings.TrimSpace(strings.Split(t, ";")[0]), "application/json")
+}
+
 func randHex() string {
 	return strconv.FormatInt(time.Now().UnixNano()%1e9, 16)
 }
 
-// SyncGroup — папки одного вида: кого нет в списке — в архив; переименованные — переименовать; новые и изменённые
-// (другая версия, пропал файл) — скачать пачками по 25; фото — по одному. Ответ — что лежит в папках.
+// SyncGroup — папки одного вида: кого нет в списке — в архив; архивные у проекта — в архиве, вернули из архива —
+// обратно; переименованные — переименовать; новые и изменённые (другая версия, пропал файл) — скачать пачками по 25;
+// фото — по одному (оригиналы — из хранилища проекта по ссылке). Ответ — что лежит в папках.
 func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g Group, res *Result, progress func(string)) (map[string]*Kept, error) {
 	root, archive := filepath.Join(dir, g.Folder), filepath.Join(dir, g.Archive)
+	at := func(arch bool) string {
+		if arch {
+			return archive
+		}
+		return root
+	}
 	manifest := filepath.Join(root, Manifest)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
@@ -465,12 +495,13 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 	for _, f := range g.Files {
 		allowed[f] = true
 	}
-	// Список проекта: проверенные имена, без повторов (Windows и Mac не различают большие и маленькие буквы).
+	// Список проекта: проверенные имена, без повторов (Windows и Mac не различают большие и маленькие буквы) — свои
+	// у папки вида и у архива.
 	var items []Item
 	byID := map[string]Item{}
 	names := map[string]bool{}
 	for _, it := range g.Items {
-		low := strings.ToLower(it.Dir)
+		low := strconv.FormatBool(it.Arch) + "|" + strings.ToLower(it.Dir)
 		if it.ID <= 0 || !Ok(it.Dir) || byID[key(it.ID)].ID != 0 || names[low] {
 			continue
 		}
@@ -486,7 +517,7 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 				continue
 			}
 			from := filepath.Join(root, k.Dir)
-			if isDir(from) {
+			if !k.Arch && isDir(from) {
 				if os.MkdirAll(archive, 0o755) != nil || MoveInto(from, filepath.Join(archive, k.Dir)) != nil {
 					continue
 				}
@@ -494,28 +525,43 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 			delete(kept, id)
 		}
 	}
+	// 1а. Убрали в архив у проекта или вернули из архива — папку туда же. Не вышло (внутри открыт файл) — остаётся,
+	// где была, перенесём в другой раз.
+	for _, it := range items {
+		k, ok := kept[key(it.ID)]
+		if !ok || k.Arch == it.Arch {
+			continue
+		}
+		from, to := filepath.Join(at(k.Arch), k.Dir), filepath.Join(at(it.Arch), k.Dir)
+		if isDir(from) && (os.MkdirAll(at(it.Arch), 0o755) != nil || MoveInto(from, to) != nil) {
+			continue
+		}
+		k.Arch = it.Arch
+	}
 	// 2. Переименованные — через временное имя: так два имени меняются местами и меняется только регистр букв. Не
 	// вышло (внутри открыт файл) — папка остаётся под прежним именем, новые файлы — в неё, переименуем в другой раз.
 	renames := map[string]string{}
 	for _, it := range items {
 		k, ok := kept[key(it.ID)]
-		if !ok || k.Dir == it.Dir {
+		if !ok || k.Dir == it.Dir || k.Arch != it.Arch {
 			continue
 		}
-		from := filepath.Join(root, k.Dir)
+		base := at(k.Arch)
+		from := filepath.Join(base, k.Dir)
 		if !isDir(from) {
 			k.Dir = it.Dir
 			continue
 		}
 		temp := fmt.Sprintf("%s%d-%s", moving, it.ID, randHex())
-		if os.Rename(from, filepath.Join(root, temp)) == nil {
+		if os.Rename(from, filepath.Join(base, temp)) == nil {
 			k.Dir = temp
 			renames[key(it.ID)] = it.Dir
 		}
 	}
 	for id, to := range renames {
 		k := kept[id]
-		if MoveInto(filepath.Join(root, k.Dir), filepath.Join(root, to)) == nil {
+		base := at(k.Arch)
+		if MoveInto(filepath.Join(base, k.Dir), filepath.Join(base, to)) == nil {
 			k.Dir = to
 		}
 	}
@@ -527,16 +573,16 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 	for _, it := range items {
 		k, ok := kept[key(it.ID)]
 		if !ok {
-			k = &Kept{Dir: it.Dir}
+			k = &Kept{Dir: it.Dir, Arch: it.Arch}
 			kept[key(it.ID)] = k
 		}
-		if err := os.MkdirAll(filepath.Join(root, k.Dir), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(at(k.Arch), k.Dir), 0o755); err != nil {
 			res.Fail(g.Folder+" "+k.Dir, err)
 			continue
 		}
 		missing := false
 		for _, f := range k.Files {
-			if !Ok(f) || !d.has(filepath.Join(root, k.Dir, f)) {
+			if !Ok(f) || !d.has(filepath.Join(at(k.Arch), k.Dir, f)) {
 				missing = true
 			}
 		}
@@ -588,7 +634,7 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 			}
 			got[one.ID] = true
 			k := kept[key(one.ID)]
-			folder := filepath.Join(root, k.Dir)
+			folder := filepath.Join(at(k.Arch), k.Dir)
 			var written []string
 			all := true
 			for _, f := range one.Files {
@@ -644,7 +690,7 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 			continue
 		}
 		k := kept[key(it.ID)]
-		folder := filepath.Join(root, k.Dir)
+		folder := filepath.Join(at(k.Arch), k.Dir)
 		if k.Photos == nil {
 			k.Photos = map[string]string{}
 		}
@@ -680,7 +726,10 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 					}
 				}
 			}
-			q := url.Values{"b": {key(biz)}, "p": {key(it.ID)}}
+			// link=1 — оригинал, как его сняли на телефон (2026-11-08, владелец: «fotografii doljni bit visokogo
+			// kachestvo vezde… v kompyutere»): проект даёт ссылку в своё хранилище, файл качаем оттуда. Фото в базе
+			// проекта или старый проект — приходит само фото.
+			q := url.Values{"b": {key(biz)}, "p": {key(it.ID)}, "link": {"1"}}
 			if p.Key != "p" {
 				q.Set("c", p.Key[1:])
 			}
@@ -696,8 +745,29 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 				res.Fail(g.Folder+" "+k.Dir, err)
 				continue
 			}
-			file := p.File + photoExt(s.Type)
-			ok, werr := d.write(filepath.Join(folder, file), buf.Bytes())
+			var file string
+			var ok bool
+			var werr error
+			if isJSON(s.Type) {
+				var l struct {
+					URL  string `json:"url"`
+					Type string `json:"type"`
+				}
+				if json.Unmarshal(buf.Bytes(), &l) != nil || l.URL == "" {
+					res.Fail(g.Folder+" "+k.Dir, &hub.APIError{Status: 502, Msg: "проект прислал ссылку на фото без адреса"})
+					continue
+				}
+				file = p.File + photoExt(l.Type)
+				_, ok, werr = d.saveWith(filepath.Join(folder, file), func(w io.Writer) (hub.Saved, error) {
+					return src.Fetch(ctx, l.URL, w, MaxPhoto)
+				})
+				if werr != nil && ctx.Err() != nil {
+					return kept, ctx.Err()
+				}
+			} else {
+				file = p.File + photoExt(s.Type)
+				ok, werr = d.write(filepath.Join(folder, file), buf.Bytes())
+			}
 			switch {
 			case werr != nil:
 				res.Fail(g.Folder+" "+k.Dir, werr)

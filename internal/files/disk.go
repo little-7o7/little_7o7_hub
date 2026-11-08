@@ -171,6 +171,11 @@ func (d *Disk) write(path string, data []byte) (bool, error) {
 
 // save — файл проекта во временный рядом (шифруем на лету) и на место. ErrNothing — у проекта его нет.
 func (d *Disk) save(ctx context.Context, src Source, op string, q url.Values, path string, max int64) (hub.Saved, bool, error) {
+	return d.saveWith(path, func(w io.Writer) (hub.Saved, error) { return src.Save(ctx, op, q, w, max) })
+}
+
+// saveWith — то, что пишет get, во временный файл рядом (шифруем на лету) и на место path.
+func (d *Disk) saveWith(path string, get func(w io.Writer) (hub.Saved, error)) (hub.Saved, bool, error) {
 	target := d.name(path)
 	t := target + tmp
 	f, err := os.OpenFile(t, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
@@ -187,7 +192,7 @@ func (d *Disk) save(ctx context.Context, src Source, op string, q url.Values, pa
 		}
 		w = sw
 	}
-	s, err := src.Save(ctx, op, q, w, max)
+	s, err := get(w)
 	if err == nil && sw != nil {
 		err = sw.Close()
 	}

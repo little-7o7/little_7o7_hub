@@ -468,9 +468,13 @@ func (a *App) syncFiles(ctx context.Context, only string, force bool) error {
 			// старше записей (проект отдал выгрузку прошлой минуты) — тоже ещё раз.
 			a.synced(p.Slug, marks[p.Slug], fresh)
 		}
-		state.Projects[p.Slug] = config.ProjectFiles{Businesses: res.Businesses, Files: res.Files, Items: res.Items, Photos: res.Photos, Locked: res.Locked, Errors: res.Errors}
-		if res.Files+res.Photos > 0 || len(res.Errors) > 0 {
-			a.Logf(len(res.Errors) > 0, "%s: файлов %d, папок %d, фото %d%s%s", p.Folder, res.Files, res.Items, res.Photos, lockedNote(res.Locked), errNote(res.Errors))
+		state.Projects[p.Slug] = config.ProjectFiles{Businesses: res.Businesses, Files: res.Files, Items: res.Items, Photos: res.Photos, Media: res.Media, Locked: res.Locked, Errors: res.Errors}
+		if res.Files+res.Photos+res.Media > 0 || len(res.Errors) > 0 {
+			media := ""
+			if res.Media > 0 {
+				media = fmt.Sprintf(", фото базы %d", res.Media)
+			}
+			a.Logf(len(res.Errors) > 0, "%s: файлов %d, папок %d, фото %d%s%s%s", p.Folder, res.Files, res.Items, res.Photos, media, lockedNote(res.Locked), errNote(res.Errors))
 		}
 	}
 	if err := a.Cfg.Update(func(x *config.Config) { x.Files = state }); err != nil {

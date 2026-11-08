@@ -50,7 +50,7 @@ func TestSarpoChangeLiveCopyAndCatchUp(t *testing.T) {
 		answers: map[string]string{
 			"sarpo/excel?b=7&f=state":                   "state1",
 			"sarpo/excel?b=7&f=day%3A2026-11-08":        "today1",
-			"sarpo/items?b=7":                           `{"groups":[]}`,
+			"sarpo/items?arch=1&b=7":                    `{"groups":[]}`,
 			"sarpo/backup?live=1&t=0":                   copyFile,
 			"sarpo/backups?":                            `{"copies":[{"name":"sarpo-2026-11-08.sql.gz"},{"name":"sarpo-2026-11-06.sql.gz"},{"name":"sarpo-2026-09-01.sql.gz"}]}`,
 			"sarpo/backup?name=sarpo-2026-11-08.sql.gz": copyFile,
@@ -155,7 +155,7 @@ func TestSaveAllAskAndWork(t *testing.T) {
 	f := &fakeHub{
 		copy: sample(t), day: "2026-11-08", version: "1", sources: `{}`, sync: "5",
 		projects: sarpoProjects(flagServer(t, &flagT), "v1"),
-		answers:  map[string]string{"sarpo/excel?b=7&f=state": "s", "sarpo/excel?b=7&f=day%3A2026-11-08": "d", "sarpo/items?b=7": `{"groups":[]}`},
+		answers:  map[string]string{"sarpo/excel?b=7&f=state": "s", "sarpo/excel?b=7&f=day%3A2026-11-08": "d", "sarpo/items?arch=1&b=7": `{"groups":[]}`},
 	}
 	a, _ := newApp(t, f, &now)
 	ctx := context.Background()

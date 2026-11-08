@@ -27,6 +27,7 @@ type ProjectFiles struct {
 	Files      int      `json:"files"`
 	Items      int      `json:"items"`
 	Photos     int      `json:"photos"`
+	Media      int      `json:"media,omitempty"`
 	Locked     int      `json:"locked"`
 	Errors     []string `json:"errors"`
 }

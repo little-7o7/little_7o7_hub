@@ -228,3 +228,45 @@ func (c *Client) ProjectFlag(ctx context.Context, raw string) (int64, error) {
 	}
 	return f.T, nil
 }
+
+// BlobHost — хранилище файлов проектов (Vercel Blob): оригиналы фото и «Фото базы» программа качает оттуда сама.
+const BlobHost = ".blob.vercel-storage.com"
+
+// BlobFile — файл из хранилища проекта по подписанной ссылке (её дал проект через хаб: на 2 часа, только этот файл,
+// только чтение) в w. Ссылка ведёт мимо хаба, поэтому ключ компьютера туда не уходит: запрос без Authorization, только
+// https на *.blob.vercel-storage.com (http — 127.0.0.1 для проверок), без переадресаций. Больше max — ошибка.
+func (c *Client) BlobFile(ctx context.Context, raw string, w io.Writer, max int64) (Saved, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.User != nil || u.Fragment != "" ||
+		!((u.Scheme == "https" && u.Port() == "" && strings.HasSuffix(strings.ToLower(u.Hostname()), BlobHost)) ||
+			(u.Scheme == "http" && strings.HasPrefix(u.Host, "127.0.0.1:"))) {
+		return Saved{}, &APIError{Status: 502, Msg: "проект прислал чужую ссылку на файл"}
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return Saved{}, err
+	}
+	req.Header.Set("User-Agent", fmt.Sprintf("LittleHub/%s (%s; %s)", c.Version, runtime.GOOS, runtime.GOARCH))
+	h := http.Client{Timeout: 20 * time.Minute}
+	if c.HTTP != nil && c.HTTP.Transport != nil {
+		h.Transport = c.HTTP.Transport
+	}
+	h.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := h.Do(req)
+	if err != nil {
+		return Saved{}, fmt.Errorf("хранилище файлов не ответило: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		return Saved{}, &APIError{Status: resp.StatusCode, Msg: "хранилище файлов не отдало файл"}
+	}
+	n, err := io.Copy(w, io.LimitReader(resp.Body, max+1))
+	if err != nil {
+		return Saved{}, fmt.Errorf("файл из хранилища не дошёл: %w", err)
+	}
+	if n > max {
+		return Saved{}, &APIError{Status: 502, Msg: "файл больше " + strconv.FormatInt(max>>20, 10) + " МБ"}
+	}
+	return Saved{Type: resp.Header.Get("Content-Type"), Bytes: n, Header: resp.Header}, nil
+}

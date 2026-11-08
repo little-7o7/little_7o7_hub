@@ -207,3 +207,54 @@ func TestProjectCalls(t *testing.T) {
 		t.Fatal("502", err)
 	}
 }
+
+func TestBlobFile(t *testing.T) {
+	ctx := context.Background()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			t.Error("ключ компьютера ушёл в хранилище")
+		}
+		switch r.URL.Path {
+		case "/jump":
+			http.Redirect(w, r, "/a.jpg", http.StatusFound)
+		case "/big":
+			_, _ = w.Write(bytes.Repeat([]byte{1}, 2<<20))
+		case "/gone":
+			w.WriteHeader(403)
+		default:
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write([]byte("jpeg"))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{Base: "https://hub.example", Token: token, Version: "1.3.0"}
+	var buf bytes.Buffer
+	if s, err := c.BlobFile(ctx, srv.URL+"/a.jpg?X-Sig=1", &buf, 1<<20); err != nil || buf.String() != "jpeg" || s.Type != "image/jpeg" || s.Bytes != 4 {
+		t.Fatal(s, err, buf.String())
+	}
+	for _, bad := range []string{
+		"http://store.private.blob.vercel-storage.com/a.jpg",       // не https
+		"https://evil.example/a.jpg",                               // не хранилище
+		"https://blob.vercel-storage.com.evil.example/a.jpg",       // похоже, но чужое
+		"https://store.private.blob.vercel-storage.com:8443/a.jpg", // чужой порт
+		"https://u:p@store.private.blob.vercel-storage.com/a.jpg",
+		"http://localhost:1/a.jpg",
+		"::",
+	} {
+		if _, err := c.BlobFile(ctx, bad, &buf, 1<<20); !IsAPI(err) {
+			t.Fatal("адрес принят", bad, err)
+		}
+	}
+	for _, p := range []string{"/jump", "/gone"} {
+		if _, err := c.BlobFile(ctx, srv.URL+p, &buf, 1<<20); !IsAPI(err) {
+			t.Fatal(p, err)
+		}
+	}
+	if _, err := c.BlobFile(ctx, srv.URL+"/big", &buf, 1<<20); !IsAPI(err) {
+		t.Fatal("больше предела", err)
+	}
+	srv.Close()
+	if _, err := c.BlobFile(ctx, srv.URL+"/a.jpg", &buf, 1<<20); err == nil || IsAPI(err) {
+		t.Fatal("не ответило", err)
+	}
+}

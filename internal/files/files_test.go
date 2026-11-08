@@ -24,16 +24,38 @@ type fake struct {
 	asked, photos, excel int
 	limit                int
 	noPhoto              bool
+	link                 string // фото — ссылкой на оригинал этого типа
 	urls                 []string
+	fetched              []string
+	blobs                map[string][]byte
 	items                func(q url.Values) (any, error)
+	media                func(q url.Values) (any, error)
 	backup               func(q url.Values, w io.Writer) (hub.Saved, error)
+}
+
+func (f *fake) Fetch(_ context.Context, link string, w io.Writer, _ int64) (hub.Saved, error) {
+	f.fetched = append(f.fetched, link)
+	b, ok := f.blobs[link]
+	if !ok {
+		return hub.Saved{}, &hub.APIError{Status: 403, Msg: "нет"}
+	}
+	_, _ = w.Write(b)
+	return hub.Saved{Type: "application/octet-stream", Bytes: int64(len(b))}, nil
 }
 
 func (f *fake) JSON(_ context.Context, op string, q url.Values, out any) error {
 	f.asked++
 	f.urls = append(f.urls, op+"?"+q.Encode())
 	var v any
-	if f.items != nil {
+	if op == "media" {
+		if f.media == nil {
+			return &hub.APIError{Status: 404, Msg: "Нет такого"}
+		}
+		var err error
+		if v, err = f.media(q); err != nil {
+			return err
+		}
+	} else if f.items != nil {
 		var err error
 		if v, err = f.items(q); err != nil {
 			return err
@@ -69,6 +91,16 @@ func (f *fake) Save(_ context.Context, op string, q url.Values, w io.Writer, _ i
 		f.photos++
 		if f.noPhoto {
 			return hub.Saved{}, hub.ErrNothing
+		}
+		if f.link != "" && q.Get("link") == "1" {
+			u := "https://store.private.blob.vercel-storage.com/" + q.Get("p") + "-" + q.Get("c")
+			if f.blobs == nil {
+				f.blobs = map[string][]byte{}
+			}
+			f.blobs[u] = []byte("orig " + q.Get("p") + "-" + q.Get("c"))
+			b, _ := json.Marshal(map[string]any{"url": u, "type": f.link, "bytes": 9})
+			_, _ = w.Write(b)
+			return hub.Saved{Type: "application/json", Bytes: int64(len(b))}, nil
 		}
 		_, _ = w.Write([]byte{1, 2, 3})
 		return hub.Saved{Type: "image/jpeg", Bytes: 3}, nil

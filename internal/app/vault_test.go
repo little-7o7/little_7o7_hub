@@ -35,7 +35,7 @@ func TestVault(t *testing.T) {
 	f := &fakeHub{
 		copy: sample(t), day: "2026-11-08", version: "1", sources: `{}`,
 		projects: `{"lock":` + lj + `,"projects":[{"slug":"sarpo","folder":"Sarpo Business","copy":false,"ok":true,"businesses":[{"id":7,"slug":"sarpotextile","name":"Sarpo Textile","kind":"shop","full":true,"ver":"v1","files":[{"key":"state","folder":"Excel","name":"Магазин.xlsx","refresh":false}]}]}]}`,
-		answers:  map[string]string{"sarpo/excel?b=7&f=state": "excel-данные", "sarpo/items?b=7": `{"groups":[]}`},
+		answers:  map[string]string{"sarpo/excel?b=7&f=state": "excel-данные", "sarpo/items?arch=1&b=7": `{"groups":[]}`},
 	}
 	a, disk := newApp(t, f, &now)
 	a.OpenDir = filepath.Join(t.TempDir(), "open")
@@ -145,7 +145,7 @@ func TestVaultPlain(t *testing.T) {
 	f := &fakeHub{
 		copy: sample(t), day: "2026-11-08", version: "1", sources: `{}`,
 		projects: `{"projects":[{"slug":"sarpo","folder":"Sarpo Business","copy":false,"ok":true,"businesses":[{"id":7,"slug":"s","name":"S","kind":"shop","full":true,"ver":"v1","files":[{"key":"state","folder":"","name":"A.xlsx","refresh":false}]}]}]}`,
-		answers:  map[string]string{"sarpo/excel?b=7&f=state": "a", "sarpo/items?b=7": `{"groups":[]}`},
+		answers:  map[string]string{"sarpo/excel?b=7&f=state": "a", "sarpo/items?arch=1&b=7": `{"groups":[]}`},
 	}
 	a, disk := newApp(t, f, &now)
 	a.OpenDir = t.TempDir()
