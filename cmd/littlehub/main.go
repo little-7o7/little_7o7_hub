@@ -5,6 +5,7 @@
 //	LittleHub --install --hub URL --pair КОД — поставить себя, подключиться к хабу, автозапуск (команда установки)
 //	LittleHub --uninstall                   — убрать автозапуск и ключ компьютера (копии на дисках остаются)
 //	LittleHub --self-test                   — проверка новой версии перед обновлением
+//	LittleHub-Setup.exe (двойной щелчок)    — установщик из хаба: в хвосте файла адрес хаба и код (internal/setup)
 package main
 
 import (
@@ -23,6 +24,7 @@ import (
 	"github.com/little-7o7/little_7o7_hub/internal/disks"
 	"github.com/little-7o7/little_7o7_hub/internal/hub"
 	"github.com/little-7o7/little_7o7_hub/internal/secret"
+	"github.com/little-7o7/little_7o7_hub/internal/setup"
 	"github.com/little-7o7/little_7o7_hub/internal/tray"
 	"github.com/little-7o7/little_7o7_hub/internal/ui"
 	"github.com/little-7o7/little_7o7_hub/internal/update"
@@ -50,7 +52,7 @@ func main() {
 	case *selfTest:
 		os.Exit(runSelfTest())
 	case *install:
-		os.Exit(runInstall(*hubURL, *pair))
+		os.Exit(runInstall(*hubURL, *pair, -1, false))
 	case *uninstall:
 		os.Exit(runUninstall())
 	default:
@@ -103,29 +105,37 @@ func stopRunning(dir string) {
 	}
 }
 
-func runInstall(hubURL, code string) int {
+// runInstall — поставить программу, подключить к хабу, включить автозапуск и открыть окно. size ≥ 0 — ставится
+// только начало файла (установщик из хаба, без хвоста). setupMode — двойной щелчок по установщику: консоли нет,
+// код не подошёл (устарел, уже потрачен) — программа всё равно ставится, а окно попросит новый код.
+func runInstall(hubURL, code string, size int64, setupMode bool) int {
+	say := func(args ...any) {
+		if !setupMode {
+			fmt.Println(append([]any{"Little Hub:"}, args...)...)
+		}
+	}
 	dir, err := config.Dir()
 	if err != nil {
-		fmt.Println("Little Hub:", err)
+		say(err)
 		return exitFailed
 	}
 	base, err := hub.CheckBase(hubURL)
 	if err != nil {
-		fmt.Println("Little Hub:", err)
+		say(err)
 		return exitFailed
 	}
 	stopRunning(dir)
 	dst, err := autostart.InstallPath()
 	if err == nil {
-		err = autostart.CopySelf(dst)
+		err = autostart.CopySelf(dst, size)
 	}
 	if err != nil {
-		fmt.Println("Little Hub: не удалось поставить программу:", err)
+		say("не удалось поставить программу:", err)
 		return exitFailed
 	}
 	a, err := newApp(dir)
 	if err != nil {
-		fmt.Println("Little Hub:", err)
+		say(err)
 		return exitFailed
 	}
 	if code != "" || !a.Paired() {
@@ -133,25 +143,29 @@ func runInstall(hubURL, code string) int {
 		p, err := a.Pair(ctx, base, code)
 		cancel()
 		switch {
+		case err != nil && setupMode:
+			a.Logf(true, "Установщик: компьютер не подключился (%v). Возьмите новый код в хабе: Настройки → Компьютеры", err)
 		case errors.Is(err, hub.ErrBadCode):
-			fmt.Println("Little Hub:", err)
+			say(err)
 			return exitBadCode
 		case err != nil:
-			fmt.Println("Little Hub:", err)
+			say(err)
 			return exitNoHub
+		default:
+			say(fmt.Sprintf("компьютер подключён как «%s»", p.Name))
 		}
-		fmt.Printf("Little Hub: компьютер подключён как «%s»\n", p.Name)
 	}
 	if err := autostart.Enable(dst); err != nil {
-		fmt.Println("Little Hub: автозапуск не включился:", err)
+		say("автозапуск не включился:", err)
 	}
 	if _, ok := waitAlive(dir, 2*time.Second); !ok {
 		_ = autostart.Start(dst)
 	}
-	if i, ok := waitAlive(dir, 20*time.Second); ok {
+	// Не подключён — окно откроет сама запущенная программа (с полем для кода); два окна не нужны.
+	if i, ok := waitAlive(dir, 20*time.Second); ok && a.Paired() {
 		_ = ui.OpenBrowser(i.URL())
 	}
-	fmt.Println("Little Hub: установлено:", dst)
+	say("установлено:", dst)
 	return 0
 }
 
@@ -179,6 +193,12 @@ func run(updated bool) int {
 		exe = r
 	}
 	installed, _ := autostart.InstallPath()
+	// Установщик из хаба (LittleHub-Setup.exe), запущенный не с места установки, — поставить и подключить.
+	if exe != installed {
+		if s, size, ok, _ := setup.Read(exe); ok {
+			return runInstall(s.Hub, s.Code, size, true)
+		}
+	}
 	// Вторая копия программы — открыть окно первой и выйти. После обновления старая ещё может выходить — ждём её.
 	if i, err := ui.ReadInfo(dir); err == nil && i.Alive() {
 		if !updated {

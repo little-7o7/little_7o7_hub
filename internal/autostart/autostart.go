@@ -9,8 +9,9 @@ import (
 	"path/filepath"
 )
 
-// CopySelf — поставить этот файл программы на её место (dst). Уже там — ничего не делать.
-func CopySelf(dst string) error {
+// CopySelf — поставить этот файл программы на её место (dst). Уже там — ничего не делать. size ≥ 0 — только первые
+// size байт: у установщика из хаба в конце хвост с кодом (internal/setup), на место идёт сама программа.
+func CopySelf(dst string, size int64) error {
 	src, err := os.Executable()
 	if err != nil {
 		return err
@@ -21,10 +22,10 @@ func CopySelf(dst string) error {
 	if b, err1 := filepath.EvalSymlinks(dst); err1 == nil && b == src {
 		return nil
 	}
-	return copyFile(src, dst)
+	return copyFile(src, dst, size)
 }
 
-func copyFile(src, dst string) error {
+func copyFile(src, dst string, size int64) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -38,7 +39,12 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	_, cerr := io.Copy(out, in)
+	var cerr error
+	if size >= 0 {
+		_, cerr = io.CopyN(out, in, size)
+	} else {
+		_, cerr = io.Copy(out, in)
+	}
 	if err := errors.Join(cerr, out.Close()); err != nil {
 		_ = os.Remove(tmp)
 		return err
