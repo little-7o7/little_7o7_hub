@@ -155,3 +155,24 @@ func TestRecordAndVerify(t *testing.T) {
 		t.Fatal("пусто")
 	}
 }
+
+func TestPruneKeepsNewestWhenClockJumps(t *testing.T) {
+	root := t.TempDir()
+	p := Project{Slug: "hub", Folder: "Хаб", Ext: "l7copy"}
+	for _, d := range []string{"2026-08-01", "2026-09-20", "2026-10-01"} {
+		rel, _ := Rel(p, d)
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755)
+		_ = os.WriteFile(filepath.Join(root, rel), []byte("x"), 0o644)
+	}
+	// Часы ушли на год вперёд (или хаб не отвечал): от сегодня старше месяца все три, но последний месяц копий — остаётся.
+	now := time.Date(2027, 11, 8, 6, 0, 0, 0, time.UTC)
+	if n := Prune(root, p, now, 30); n != 1 {
+		t.Fatal("удалено", n)
+	}
+	if l := List(root, p); len(l) != 2 || l[0].Day != "2026-09-20" {
+		t.Fatal(l)
+	}
+	if Prune(t.TempDir(), p, now, 30) != 0 {
+		t.Fatal("пусто")
+	}
+}

@@ -28,7 +28,8 @@ import (
 // Фото товаров и цветов сюда не входят: они уже лежат в папках «Товары» (каждое фото — один раз). Проект отдаёт список
 // страницами (after — id) с подписанными ссылками в своё хранилище; программа качает только новые. Раз в день (и по
 // «Сохранить сейчас») — весь список: переименованные (операцию поправили) переименовать, стёртые в хранилище отметить
-// в списке — файл на диске остаётся.
+// в списке — файл на диске остаётся. Задан пароль копий — в открытом «.littlehub.json» только пути (что на фото, суммы
+// и комментарии — лишь в зашифрованном «Список фото.csv», он пишется при полном проходе).
 
 const (
 	MediaFolder = "Фото базы"
@@ -110,6 +111,7 @@ func Media(ctx context.Context, src Source, biz int, dir string, d *Disk, force 
 		today = d.Today
 	}
 	full := force || today == "" || m.Full != today
+	sealed := d != nil && d.Lock != nil
 	after := m.Last
 	if full {
 		after = 0
@@ -172,6 +174,9 @@ func Media(ctx context.Context, src Source, biz int, dir string, d *Disk, force 
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
+				if is404(err) {
+					continue // в хранилище проекта файла нет: не ошибка, иначе каждый проход начинался бы с него
+				}
 				res.Fail(MediaFolder+" "+rel, err)
 				failed = minFail(failed, f.ID)
 				continue
@@ -191,7 +196,7 @@ func Media(ctx context.Context, src Source, biz int, dir string, d *Disk, force 
 				if progress != nil {
 					progress(MediaFolder + " " + strconv.Itoa(got))
 				}
-				if err := saveMedia(manifest, m); err != nil {
+				if err := saveMedia(manifest, m, sealed); err != nil {
 					return err
 				}
 			}
@@ -219,14 +224,14 @@ func Media(ctx context.Context, src Source, biz int, dir string, d *Disk, force 
 		return nil
 	}
 	list := filepath.Join(root, MediaList)
-	if changed || !d.has(list) {
+	if (changed || !d.has(list)) && (full || !sealed) {
 		if ok, err := d.write(list, mediaCSV(m)); err != nil {
 			res.Fail(MediaFolder+" "+MediaList, err)
 		} else if !ok {
 			res.Locked++
 		}
 	}
-	return saveMedia(manifest, m)
+	return saveMedia(manifest, m, sealed)
 }
 
 func minFail(failed, id int) int {
@@ -236,8 +241,16 @@ func minFail(failed, id int) int {
 	return failed
 }
 
-func saveMedia(path string, m *mediaKept) error {
-	b, err := json.Marshal(m)
+// saveMedia — «.littlehub.json»; sealed — без описаний: файл лежит открытым рядом с зашифрованными фото.
+func saveMedia(path string, m *mediaKept, sealed bool) error {
+	out := m
+	if sealed {
+		out = &mediaKept{Full: m.Full, Last: m.Last, Files: make(map[string]*mediaOne, len(m.Files))}
+		for id, one := range m.Files {
+			out.Files[id] = &mediaOne{Path: one.Path, Blob: one.Blob, Gone: one.Gone}
+		}
+	}
+	b, err := json.Marshal(out)
 	if err != nil {
 		return err
 	}

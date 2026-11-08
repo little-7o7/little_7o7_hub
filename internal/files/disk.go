@@ -19,8 +19,9 @@ import (
 //
 //   - Файл под паролем копий лежит как «<имя>.l7» (internal/fileseal); пароль копий не задан — открытым, как раньше.
 //     Открытый файл прежней программы (1.2) при первой встрече шифруется на месте, время записи остаётся.
-//   - Excel, записанный в прошлый день, перед заменой уходит в «Старые версии/<день>/<тот же путь>»: в течение дня
-//     файл просто заменяется, в «Старых версиях» — по одному на день. Старше 30 дней — удаляет PruneOld.
+//   - Excel, записанный в прошлый день, перед заменой уходит в «Старые версии/<вчера>/<тот же путь>» — каким он был
+//     в конце того дня: в течение дня файл просто заменяется, в «Старых версиях» — по одному на день. Старше 30 дней —
+//     удаляет PruneOld.
 
 // OldFolder — «Старые версии» в папке «Little Hub» диска.
 const OldFolder = "Старые версии"
@@ -121,10 +122,16 @@ func (d *Disk) keepOld(path string) bool {
 	if err != nil {
 		return true
 	}
-	day := st.ModTime().In(days.Tashkent).Format("2006-01-02")
-	if day >= d.Today {
+	if st.ModTime().In(days.Tashkent).Format("2006-01-02") >= d.Today {
 		return true
 	}
+	// Папка — вчерашний день: таким файл был в конце вчера. Не день записи: файл месячной давности иначе лёг бы
+	// в папку старше 30 дней и сразу удалился бы.
+	t, err := time.ParseInLocation("2006-01-02", d.Today, days.Tashkent)
+	if err != nil {
+		return true
+	}
+	day := t.AddDate(0, 0, -1).Format("2006-01-02")
 	rel, err := filepath.Rel(d.Root, have)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return true

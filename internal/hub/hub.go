@@ -53,7 +53,7 @@ func CheckBase(raw string) (string, error) {
 }
 
 func (c *Client) client() *http.Client {
-	h := http.Client{Timeout: 5 * time.Minute}
+	h := http.Client{Timeout: 30 * time.Minute} // копия базы в сотни МБ по медленному интернету
 	if c.HTTP != nil {
 		h = *c.HTTP
 	}

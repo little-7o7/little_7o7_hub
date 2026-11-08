@@ -113,10 +113,9 @@ func FetchCopy(ctx context.Context, src Source, p days.Project, root string, q u
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fail(err)
 	}
-	if err := os.Rename(t, path); err != nil {
+	if err := days.Settle(t, path, hex.EncodeToString(h.Sum(nil))); err != nil {
 		return fail(err)
 	}
-	days.Record(path, hex.EncodeToString(h.Sum(nil)))
 	return Copied{Name: name, Day: day, Bytes: s.Bytes, Path: path, Made: max(made, 0)}, nil
 }
 

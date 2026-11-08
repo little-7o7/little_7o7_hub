@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/little-7o7/little_7o7_hub/internal/days"
 	"github.com/little-7o7/little_7o7_hub/internal/hub"
@@ -291,6 +292,22 @@ func TestExcel(t *testing.T) {
 	// Изменился — заново «что есть сейчас» и refresh, прошедший день — нет.
 	if err := Excel(ctx, f, b, dir, &Disk{Today: "2026-10-27"}, true, res); err != nil || f.excel != 5 {
 		t.Fatalf("обновление: %d", f.excel)
+	}
+	// Месяц и день без refresh, записанные, пока они шли, — заново (там могло не хватать конца); записанные позже — нет.
+	b.Files = []hub.PcFile{{Key: "journal:2026-10", Folder: "Журнал", Name: "Журнал-2026-10.xlsx"}, {Key: "day:2026-11-07", Folder: "Продажи", Name: "Продажи-2026-11-07.xlsx"}}
+	for _, p := range [][2]string{{"Журнал", "Журнал-2026-10.xlsx"}, {"Продажи", "Продажи-2026-11-07.xlsx"}} {
+		_ = os.MkdirAll(filepath.Join(dir, p[0]), 0o755)
+		_ = os.WriteFile(filepath.Join(dir, p[0], p[1]), []byte("часть"), 0o644)
+	}
+	during := time.Date(2026, 10, 31, 15, 0, 0, 0, time.UTC)
+	_ = os.Chtimes(filepath.Join(dir, "Журнал", "Журнал-2026-10.xlsx"), during, during)
+	night := time.Date(2026, 11, 7, 18, 30, 0, 0, time.UTC) // 23:30 по Ташкенту
+	_ = os.Chtimes(filepath.Join(dir, "Продажи", "Продажи-2026-11-07.xlsx"), night, night)
+	if err := Excel(ctx, f, b, dir, &Disk{Today: "2026-11-08"}, true, res); err != nil || f.excel != 7 || read(t, dir, "Журнал", "Журнал-2026-10.xlsx") == "часть" {
+		t.Fatalf("недописанные: %d", f.excel)
+	}
+	if err := Excel(ctx, f, b, dir, &Disk{Today: "2026-11-08"}, true, res); err != nil || f.excel != 7 {
+		t.Fatalf("дописанные качаются снова: %d", f.excel)
 	}
 }
 

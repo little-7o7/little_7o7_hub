@@ -32,6 +32,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/little-7o7/little_7o7_hub/internal/days"
 	"github.com/little-7o7/little_7o7_hub/internal/hub"
 )
 
@@ -219,6 +220,15 @@ func MoveInto(src, dst string) error {
 	return os.Rename(src, free)
 }
 
+// moveFree — папку src под имя dst, а занято — под первое свободное «dst (2)», «dst (3)»…: без слияния. Ответ — куда.
+func moveFree(src, dst string) (string, error) {
+	to := dst
+	for n := 2; exists(to); n++ {
+		to = fmt.Sprintf("%s (%d)", dst, n)
+	}
+	return to, os.Rename(src, to)
+}
+
 // ---------- Бизнес ----------
 
 // ReadVer — версия бизнеса, с которой папка уже полностью совпадает; нет — "".
@@ -293,6 +303,35 @@ func Business(ctx context.Context, src Source, b hub.Business, dir string, d *Di
 	return nil
 }
 
+var (
+	periodDay   = regexp.MustCompile(`(?:^|[-\s])(\d{4}-\d{2}-\d{2})\.xlsx$`)
+	periodMonth = regexp.MustCompile(`(?:^|[-\s])(\d{4}-\d{2})\.xlsx$`)
+)
+
+// unfinished — файл за день или месяц (дата в имени) записан, пока тот день или месяц ещё шёл: в нём может не быть
+// последних записей (компьютер выключили вечером, файл был открыт в Excel). Такой качаем заново, как refresh, пока
+// не запишем его уже после конца своего дня или месяца.
+func unfinished(path, name string) bool {
+	end := ""
+	if m := periodDay.FindStringSubmatch(name); m != nil {
+		end = m[1]
+	} else if m := periodMonth.FindStringSubmatch(name); m != nil {
+		t, err := time.ParseInLocation("2006-01", m[1], days.Tashkent)
+		if err != nil {
+			return false
+		}
+		end = t.AddDate(0, 1, -1).Format("2006-01-02")
+	} else {
+		return false
+	}
+	have := find(path)
+	if have == "" {
+		return false
+	}
+	st, err := os.Stat(have)
+	return err == nil && st.ModTime().In(days.Tashkent).Format("2006-01-02") <= end
+}
+
 // Excel — файлы Excel бизнеса. Нет — скачать. Бизнес изменился (changed) — заново «что есть сейчас» и файлы с
 // refresh (текущий месяц, прибыль). Прошедшие дни и месяцы — только если файла нет. «Что есть сейчас» за прошлые дни
 // хранится 30 дней, как в Sarpo Business.
@@ -306,7 +345,7 @@ func Excel(ctx context.Context, src Source, b hub.Business, dir string, d *Disk,
 			folder = filepath.Join(dir, f.Folder)
 		}
 		path := filepath.Join(folder, f.Name)
-		if d.has(path) && !(changed && (f.Refresh || f.Key == "state")) {
+		if d.has(path) && !(changed && (f.Refresh || f.Key == "state" || unfinished(path, f.Name))) {
 			continue
 		}
 		if err := os.MkdirAll(folder, 0o755); err != nil {
@@ -511,6 +550,15 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 	}
 	// 1. Кого больше нет (в архиве у проекта, удалён) — папку целиком в «… (архив)». Пустой список при прежних папках
 	// похож на сбой: ничего не убираем.
+	// Чья папка под этим именем (вид или архив): папку одного не сливаем с папкой другого — берём свободное имя.
+	taken := func(arch bool, dir, self string) bool {
+		for id, k := range kept {
+			if id != self && k.Arch == arch && strings.EqualFold(k.Dir, dir) {
+				return true
+			}
+		}
+		return false
+	}
 	if len(items) > 0 {
 		for id, k := range kept {
 			if _, ok := byID[id]; ok {
@@ -518,7 +566,12 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 			}
 			from := filepath.Join(root, k.Dir)
 			if !k.Arch && isDir(from) {
-				if os.MkdirAll(archive, 0o755) != nil || MoveInto(from, filepath.Join(archive, k.Dir)) != nil {
+				to := filepath.Join(archive, k.Dir)
+				move := MoveInto
+				if taken(true, k.Dir, id) {
+					move = func(a, b string) error { _, err := moveFree(a, b); return err }
+				}
+				if os.MkdirAll(archive, 0o755) != nil || move(from, to) != nil {
 					continue
 				}
 			}
@@ -533,17 +586,41 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 			continue
 		}
 		from, to := filepath.Join(at(k.Arch), k.Dir), filepath.Join(at(it.Arch), k.Dir)
-		if isDir(from) && (os.MkdirAll(at(it.Arch), 0o755) != nil || MoveInto(from, to) != nil) {
-			continue
+		if isDir(from) {
+			if os.MkdirAll(at(it.Arch), 0o755) != nil {
+				continue
+			}
+			if taken(it.Arch, k.Dir, key(it.ID)) {
+				got, err := moveFree(from, to)
+				if err != nil {
+					continue
+				}
+				k.Dir = filepath.Base(got)
+			} else if MoveInto(from, to) != nil {
+				continue
+			}
 		}
 		k.Arch = it.Arch
 	}
 	// 2. Переименованные — через временное имя: так два имени меняются местами и меняется только регистр букв. Не
 	// вышло (внутри открыт файл) — папка остаётся под прежним именем, новые файлы — в неё, переименуем в другой раз.
-	renames := map[string]string{}
+	renames, prev := map[string]string{}, map[string]string{}
 	for _, it := range items {
 		k, ok := kept[key(it.ID)]
 		if !ok || k.Dir == it.Dir || k.Arch != it.Arch {
+			continue
+		}
+		// Под новым именем — папка другого, который сам никуда не переезжает: не сливаем, ждём, пока освободится.
+		if busy := func() bool {
+			for id, o := range kept {
+				if id != key(it.ID) && o.Arch == k.Arch && strings.EqualFold(o.Dir, it.Dir) {
+					if n, ok := byID[id]; !ok || strings.EqualFold(n.Dir, o.Dir) {
+						return true
+					}
+				}
+			}
+			return false
+		}(); busy {
 			continue
 		}
 		base := at(k.Arch)
@@ -554,6 +631,7 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 		}
 		temp := fmt.Sprintf("%s%d-%s", moving, it.ID, randHex())
 		if os.Rename(from, filepath.Join(base, temp)) == nil {
+			prev[key(it.ID)] = k.Dir
 			k.Dir = temp
 			renames[key(it.ID)] = it.Dir
 		}
@@ -563,6 +641,8 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 		base := at(k.Arch)
 		if MoveInto(filepath.Join(base, k.Dir), filepath.Join(base, to)) == nil {
 			k.Dir = to
+		} else if os.Rename(filepath.Join(base, k.Dir), filepath.Join(base, prev[id])) == nil {
+			k.Dir = prev[id] // не вышло — вернуть прежнее имя: временное «~lh-…» при следующем разе не узнать
 		}
 	}
 	if err := saveKept(manifest, kept); err != nil {
@@ -763,6 +843,11 @@ func SyncGroup(ctx context.Context, src Source, biz int, dir string, d *Disk, g 
 				})
 				if werr != nil && ctx.Err() != nil {
 					return kept, ctx.Err()
+				}
+				if is404(werr) {
+					// В хранилище проекта фото нет: как «фото нет», иначе версия бизнеса не запишется и всё пойдёт заново.
+					k.Photos[p.Key] = p.Ver + "|"
+					continue
 				}
 			} else {
 				file = p.File + photoExt(s.Type)

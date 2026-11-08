@@ -231,4 +231,8 @@ func TestMediaSealedAndMissing(t *testing.T) {
 		!isFile(filepath.Join(root, "Чеки операций", "2026-11", "2026-11-02 Расход №1.jpg"+fileseal.Ext)) {
 		t.Fatal(names(t, root))
 	}
+	// В открытом «.littlehub.json» — только пути, без «что на фото».
+	if m := read(t, root, Manifest); !strings.Contains(m, "a/1") || strings.Contains(m, "Чек №") || strings.Contains(m, "what") {
+		t.Fatal("описания в открытом файле:", m)
+	}
 }

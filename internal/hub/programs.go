@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -47,6 +48,9 @@ func (c *Client) Programs(ctx context.Context) ([]Program, error) {
 	return r.Programs, nil
 }
 
+// assetURL — файл выпуска Little Hub через хаб: только номер файла, никаких других адресов хаба с ключом компьютера.
+var assetURL = regexp.MustCompile(`^/api/pc/asset/[0-9]{1,20}$`)
+
 // githubHost — куда GitHub переадресует файл выпуска (короткая ссылка на хранилище файлов).
 func githubHost(h string) bool {
 	h = strings.ToLower(h)
@@ -58,7 +62,9 @@ func githubHost(h string) bool {
 func (c *Client) ProgramFile(ctx context.Context, p Program, w io.Writer) (int64, error) {
 	var resp *http.Response
 	switch {
-	case strings.HasPrefix(p.URL, "/api/pc/asset/") || p.URL == "/api/pc/programs/sarpo":
+	case strings.ContainsAny(p.URL, "?#%\\") || strings.Contains(p.URL, ".."):
+		return 0, &APIError{Status: 502, Msg: "хаб прислал чужую ссылку на программу"}
+	case assetURL.MatchString(p.URL) || p.URL == "/api/pc/programs/sarpo":
 		r, err := c.do(ctx, "GET", p.URL, nil, true)
 		if err != nil {
 			return 0, err

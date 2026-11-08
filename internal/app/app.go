@@ -409,15 +409,15 @@ func (a *App) syncFiles(ctx context.Context, only string, force bool) error {
 	root := disks.Root(active)
 	now := a.now()
 	today := days.Today(now)
+	if lock == nil && cfg.Lock != nil {
+		// Хаб не прислал ключ (сбой или чужой ответ): шифрование не выключаем — пишем прежним ключом.
+		lock = cfg.Lock
+	}
 	if (lock == nil) != (cfg.Lock == nil) || (lock != nil && lock.Tag() != cfg.Lock.Tag()) {
 		if err := a.Cfg.Update(func(x *config.Config) { x.Lock = lock }); err != nil {
 			return err
 		}
-		if lock != nil {
-			a.Logf(false, "Файлы проектов теперь под паролем копий: открыть их можно в окне Little Hub → «Файлы»")
-		} else {
-			a.Logf(true, "В хабе не задан пароль копий: файлы проектов лежат открытыми")
-		}
+		a.Logf(false, "Файлы проектов теперь под паролем копий: открыть их можно в окне Little Hub → «Файлы»")
 	}
 	disk := &files.Disk{Root: root, Today: today, Lock: lock}
 	state := &config.Files{At: now.UTC().Format(time.RFC3339), Disk: active, Projects: map[string]config.ProjectFiles{}}

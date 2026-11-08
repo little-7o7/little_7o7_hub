@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -164,12 +165,20 @@ var monthRe = regexp.MustCompile(`^\d{4}-\d{2}$`)
 func Since(now time.Time, n int) string { return Today(now.AddDate(0, 0, -n)) }
 
 // Prune — файлы дней старше keep дней (владелец 2026-11-08: «1 mesyats») удалить, пустые папки месяцев — тоже.
-// Ответ — сколько удалено.
+// Считаем и от сегодня, и от самой свежей копии на диске — что раньше: часы компьютера ушли вперёд или хаб месяц
+// не отвечал — последние копии всё равно остаются. Ответ — сколько удалено.
 func Prune(root string, p Project, now time.Time, keep int) int {
+	list := List(root, p)
+	if len(list) == 0 {
+		return 0
+	}
 	oldest := Since(now, keep)
+	if t, err := time.ParseInLocation("2006-01-02", list[len(list)-1].Day, Tashkent); err == nil {
+		oldest = min(oldest, Today(t.AddDate(0, 0, -keep).Add(12*time.Hour)))
+	}
 	n := 0
 	dirs := map[string]bool{}
-	for _, d := range List(root, p) {
+	for _, d := range list {
 		if d.Day >= oldest {
 			continue
 		}
@@ -215,8 +224,29 @@ func writeShas(manifest string, m map[string]string) {
 	}
 }
 
+// shaMu — запись файла дня с его SHA-256 и недельная проверка не идут одновременно: иначе проверка увидит новый файл
+// со старой записью и удалит его.
+var shaMu sync.Mutex
+
+// Settle — готовый временный файл t на место файла дня path и его SHA-256 — в запись, под замком.
+func Settle(t, path, sha string) error {
+	shaMu.Lock()
+	defer shaMu.Unlock()
+	if err := os.Rename(t, path); err != nil {
+		return err
+	}
+	record(path, sha)
+	return nil
+}
+
 // Record — запомнить SHA-256 файла дня, который только что записали.
 func Record(path, sha string) {
+	shaMu.Lock()
+	defer shaMu.Unlock()
+	record(path, sha)
+}
+
+func record(path, sha string) {
 	manifest, key := shaPlace(path)
 	m := readShas(manifest)
 	if m[key] == sha {
@@ -230,6 +260,8 @@ func Record(path, sha string) {
 // размер, пароль не нужен). Испорчен — удалить: докачка возьмёт его заново (хаб и Sarpo держат 30 дней). Записи нет
 // (копия от прежней программы) — запомнить. Записи удалённых файлов — забыть. Ответ — сколько проверено и испорченные.
 func Verify(root string, p Project, headLen int, check func(head []byte, size int64) error) (int, []string) {
+	shaMu.Lock()
+	defer shaMu.Unlock()
 	list := List(root, p)
 	manifest := filepath.Join(root, p.Folder, "Копии базы", ShaFile)
 	m := readShas(manifest)

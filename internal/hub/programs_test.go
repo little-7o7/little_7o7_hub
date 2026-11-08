@@ -80,6 +80,10 @@ func TestProgramFile(t *testing.T) {
 		{URL: "/api/pc/copy"},
 		{URL: "https://github.com/other/repo/releases/download/v1/x.exe"},
 		{URL: "/api/pc/programs/sarpo"}, // 404
+		{URL: "/api/pc/asset/../copy"},
+		{URL: "/api/pc/asset/1/../../copy"},
+		{URL: "/api/pc/asset/%2e%2e/copy"},
+		{URL: PluginReleases + "../../../other/repo/releases/download/v1/x.exe"},
 	} {
 		seen = nil
 		if _, err := c.ProgramFile(ctx, p, io.Discard); err == nil {

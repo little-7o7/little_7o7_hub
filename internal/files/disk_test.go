@@ -60,8 +60,9 @@ func TestSealedBusiness(t *testing.T) {
 		t.Fatal("открытые файлы")
 	}
 	old := time.Date(2026, 11, 7, 10, 0, 0, 0, time.UTC)
-	_ = os.Chtimes(filepath.Join(dir, "Продажи", "Продажи-2026-11-07.xlsx"), old, old)
 	_ = os.Chtimes(filepath.Join(dir, "Excel", "Shop.xlsx"), old, old)
+	old = time.Date(2026, 11, 7, 20, 0, 0, 0, time.UTC) // 8-е 01:00 по Ташкенту: день 7-го уже дописан
+	_ = os.Chtimes(filepath.Join(dir, "Продажи", "Продажи-2026-11-07.xlsx"), old, old)
 	// Пароль копий задан: та же версия бизнеса, но проходим заново — всё шифруется, открытых не остаётся.
 	d := &Disk{Root: root, Today: "2026-11-08", Lock: testLock(t)}
 	excel := f.excel
@@ -170,5 +171,22 @@ func TestDiskHelpers(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(ex, "Shop-2026-09-01.xlsx.l7"), []byte("x"), 0o644)
 	if CleanupPrefix(ex, "Shop-", "2026-11-08", 30) != 1 {
 		t.Fatal("уборка зашифрованных")
+	}
+}
+
+func TestKeepOldNamesYesterday(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "Хаб", "Курсы.xlsx")
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.WriteFile(path, []byte("сентябрь"), 0o644)
+	old := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	_ = os.Chtimes(path, old, old)
+	d := &Disk{Root: root, Today: "2026-11-08"}
+	// Файл двухмесячной давности — в папку вчерашнего дня, а не сентября (её PruneOld удалил бы сразу).
+	if !d.keepOld(path) || read(t, filepath.Join(root, OldFolder, "2026-11-07", "Хаб"), "Курсы.xlsx") != "сентябрь" {
+		t.Fatal("старая версия не во вчерашней папке")
+	}
+	if PruneOld(root, time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC), 30) != 0 {
+		t.Fatal("удалена сразу")
 	}
 }

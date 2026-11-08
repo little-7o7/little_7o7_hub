@@ -218,7 +218,7 @@ func (a *App) OpenFile(rel string) (Opened, error) {
 		if r := filepath.ToSlash(rel); r == files.ProgramsFolder || strings.HasPrefix(r, files.ProgramsFolder+"/") {
 			return Opened{Path: full, Reveal: true}, nil
 		}
-		return Opened{Path: full}, nil // открытый файл (пароль копий не задан) — прямо с диска
+		return Opened{Path: full, Reveal: !viewable(full)}, nil // открытый файл (пароль копий не задан) — прямо с диска
 	}
 	keys := a.keysNow()
 	if keys == nil {
@@ -241,7 +241,18 @@ func (a *App) OpenFile(rel string) (Opened, error) {
 		_ = os.RemoveAll(dir)
 		return Opened{}, err
 	}
-	return Opened{Path: out}, nil
+	return Opened{Path: out, Reveal: !viewable(out)}, nil
+}
+
+// viewable — файл с таким расширением окно открывает само (Excel, PDF, фото, текст). Другое (.exe, .bat, .lnk…) —
+// только показывает в папке: имя файла пришло от проекта, запускать его — решение человека.
+func viewable(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".xlsx", ".xls", ".csv", ".pdf", ".txt", ".docx", ".doc", ".odt", ".ods",
+		".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif", ".bmp", ".tif", ".tiff", ".mp4", ".mov":
+		return true
+	}
+	return false
 }
 
 func isRegular(p string) bool {
