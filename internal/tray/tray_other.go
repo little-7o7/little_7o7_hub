@@ -20,3 +20,6 @@ func Stop() {
 		close(stop)
 	}
 }
+
+// ICO — на Linux ярлыков нет.
+func ICO() []byte { return nil }

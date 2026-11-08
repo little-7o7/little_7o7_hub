@@ -89,7 +89,9 @@ type Server struct {
 	Key  string
 	Port int
 	Quit func()
-	srv  *http.Server
+	// OpenFolder — как открыть папку (тесты подменяют); пусто — Проводник или Finder.
+	OpenFolder func(string) error
+	srv        *http.Server
 }
 
 // Listen — занять порт и записать ui.json.
@@ -179,6 +181,11 @@ func (s *Server) Handler() http.Handler {
 		go func() { _ = s.App.SendRates(context.Background()) }()
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
+	mux.HandleFunc("POST /api/update", func(w http.ResponseWriter, r *http.Request) {
+		s.App.UpdateNow()
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/open", s.open)
 	mux.HandleFunc("POST /api/disks", s.disks)
 	mux.HandleFunc("POST /api/lang", func(w http.ResponseWriter, r *http.Request) {
 		var b struct{ Lang string }
@@ -253,6 +260,25 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"name": p.Name})
+}
+
+// open — «Открыть папку»: папка «Little Hub» на диске из списка программы (пусто — где сейчас копии).
+func (s *Server) open(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Disk string }
+	_ = json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&b)
+	dir, err := s.App.FolderOf(b.Disk)
+	if err == nil {
+		open := s.OpenFolder
+		if open == nil {
+			open = OpenFolder
+		}
+		err = open(dir)
+	}
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"folder": dir})
 }
 
 func (s *Server) disks(w http.ResponseWriter, r *http.Request) {

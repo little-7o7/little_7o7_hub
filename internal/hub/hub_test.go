@@ -42,7 +42,7 @@ func fake(t *testing.T) (*httptest.Server, *Client) {
 		}
 		_ = json.NewEncoder(w).Encode(Paired{Token: token, ID: 3, Name: b["name"], Flag: "/api/pc/flag/k"})
 	})
-	mux.HandleFunc("GET /api/pc/flag/k", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"v":"5.1.2"}`)) })
+	mux.HandleFunc("GET /api/pc/flag/k", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"v":"5.1.2","u":"7"}`)) })
 	mux.HandleFunc("GET /api/pc/copy", authed(func(w http.ResponseWriter, r *http.Request) {
 		body := []byte("COPY")
 		s := sha256.Sum256(body)
@@ -91,7 +91,7 @@ func TestPairAndCalls(t *testing.T) {
 	}
 	c.Token = p.Token
 	v, err := c.Flag(ctx, p.Flag)
-	if err != nil || v != "5.1.2" {
+	if err != nil || v.V != "5.1.2" || v.U != "7" {
 		t.Fatal(v, err)
 	}
 	if _, err := c.Flag(ctx, "/x"); err == nil {

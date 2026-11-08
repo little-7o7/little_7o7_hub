@@ -176,6 +176,7 @@ func runUninstall() int {
 	}
 	stopRunning(dir)
 	_ = autostart.Disable()
+	_ = autostart.RemoveShortcuts()
 	_ = secret.New(dir).Delete()
 	fmt.Println("Little Hub: автозапуск и ключ компьютера убраны. Копии на дисках остались.")
 	return 0
@@ -215,6 +216,15 @@ func run(updated bool) int {
 	}
 	if exe == installed {
 		a.Exe = exe
+		if !a.Cfg.Get().Shortcuts {
+			go func() {
+				if err := autostart.Shortcuts(exe, tray.ICO()); err != nil {
+					a.Logf(true, "Ярлыки в «Пуске» и на рабочем столе не сделались: %v", err)
+					return
+				}
+				_ = a.Cfg.Update(func(c *config.Config) { c.Shortcuts = true })
+			}()
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	var server *ui.Server

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -73,6 +74,12 @@ type App struct {
 	filesBusy bool
 	filesTry  time.Time
 	filesStep string
+
+	// Обновление: updBusy — идёт проверка или установка; updSeen — просьба «Обновить программу» из хаба, которую уже
+	// видели (пусто — флаг ещё не читали: старая просьба до запуска программы не в счёт).
+	updBusy   bool
+	updSeen   string
+	updSeenOK bool
 }
 
 type LogLine struct {
@@ -381,7 +388,11 @@ func (a *App) syncFiles(ctx context.Context) error {
 			if !files.SlugRe.MatchString(b.Slug) {
 				continue
 			}
-			if err := files.Business(ctx, src, b, filepath.Join(dir, b.Slug), today, res, a.step); err != nil {
+			bdir := filepath.Join(dir, b.Slug)
+			if b.Root {
+				bdir = dir // один «бизнес» у проекта (Strassio) — прямо в его папке
+			}
+			if err := files.Business(ctx, src, b, bdir, today, res, a.step); err != nil {
 				stop = err
 				break
 			}
@@ -551,11 +562,23 @@ func (a *App) SendRates(ctx context.Context) error {
 	return nil
 }
 
-// CheckUpdate — есть новая версия — скачать, проверить, поставить и перезапуститься.
+// CheckUpdate — есть новая версия — скачать, проверить, поставить и перезапуститься. Уже идёт — ничего не делать.
 func (a *App) CheckUpdate(ctx context.Context) error {
 	if a.Exe == "" {
 		return nil
 	}
+	a.mu.Lock()
+	if a.updBusy {
+		a.mu.Unlock()
+		return nil
+	}
+	a.updBusy = true
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		a.updBusy = false
+		a.mu.Unlock()
+	}()
 	c, err := a.client()
 	if err != nil {
 		return err
@@ -587,13 +610,65 @@ func (a *App) CheckUpdate(ctx context.Context) error {
 	a.mu.Unlock()
 	if err != nil {
 		a.Logf(true, "Обновление не поставилось: %v", err)
-		return err
+		return applyErr{err}
 	}
 	a.Logf(false, "Версия %s поставлена — перезапуск", rel.Version)
 	if a.OnRestart != nil {
 		a.OnRestart()
 	}
 	return nil
+}
+
+// applyErr — новая версия скачана, но не поставилась (уже записано в журнал).
+type applyErr struct{ error }
+
+func (e applyErr) Unwrap() error { return e.error }
+
+// UpdateNow — «Обновить программу» (кнопка в окне или просьба из хаба): проверить и поставить сейчас, не ждать
+// 6 часов. Работает в фоне; окно видит «проверяю» (View.Updating) и итог в журнале.
+func (a *App) UpdateNow() {
+	if a.Exe == "" {
+		a.Logf(true, "Обновление: эта копия программы запущена не с места установки — обновляется только установленная")
+		return
+	}
+	a.mu.Lock()
+	if a.updBusy {
+		a.mu.Unlock()
+		return
+	}
+	a.updateErr = ""
+	a.mu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		a.Logf(false, "Проверяю обновление…")
+		err := a.CheckUpdate(ctx)
+		a.mu.Lock()
+		latest := a.latest
+		if err != nil && a.updateErr == "" {
+			a.updateErr = err.Error()
+		}
+		a.mu.Unlock()
+		var ae applyErr
+		switch {
+		case err != nil && !errors.As(err, &ae):
+			a.Logf(true, "Обновление не проверилось: %v", err)
+		case err == nil && !update.Newer(a.Version, latest):
+			a.Logf(false, "Новой версии нет: у вас последняя (%s)", a.Version)
+		}
+	}()
+}
+
+// seeUpdateAsk — просьба «Обновить программу» из хаба: новая (не та, что была при запуске) — обновиться.
+func (a *App) seeUpdateAsk(u string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if u == "" {
+		return false
+	}
+	ask := a.updSeenOK && u != a.updSeen
+	a.updSeen, a.updSeenOK = u, true
+	return ask
 }
 
 // tick — раз в 2 минуты: флаг хаба, и если пора — копия.
@@ -615,11 +690,16 @@ func (a *App) tick(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	v, err := c.Flag(ctx, cfg.Flag)
+	f, err := c.Flag(ctx, cfg.Flag)
 	if err != nil {
 		a.setErr(err)
 		return
 	}
+	if a.seeUpdateAsk(f.U) {
+		a.Logf(false, "Хаб попросил обновить программу")
+		a.UpdateNow()
+	}
+	v := f.V
 	a.mu.Lock()
 	a.flag = v
 	due := a.deb.Observe(v, copied, now)
@@ -723,6 +803,9 @@ type View struct {
 	Files     *config.Files          `json:"files,omitempty"`
 	FilesBusy bool                   `json:"filesBusy"`
 	FilesStep string                 `json:"filesStep,omitempty"`
+	Updating  bool                   `json:"updating"`
+	// Folder — папка «Little Hub» на диске, куда сейчас идут копии и файлы (кнопка «Открыть папку»).
+	Folder string `json:"folder,omitempty"`
 }
 
 func (a *App) View() View {
@@ -731,6 +814,11 @@ func (a *App) View() View {
 	v := View{Version: a.Version, Paired: a.Paired(), Hub: cfg.Hub, Name: cfg.Name, Disks: st, Copies: cfg.Copies, Today: days.Today(a.now()), RatesAt: cfg.RatesAt, Lang: cfg.Lang, Files: cfg.Files}
 	if derr != nil {
 		v.DiskError = derr.Error()
+	}
+	for _, d := range st {
+		if d.Active {
+			v.Folder = disks.Root(d.Path)
+		}
 	}
 	have := map[string]bool{}
 	for _, d := range cfg.Disks {
@@ -744,7 +832,7 @@ func (a *App) View() View {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	v.Latest, v.UpdateErr, v.Revoked, v.NoPass, v.Busy, v.Error = a.latest, a.updateErr, a.revoked, a.noPass, a.busy, a.lastErr
-	v.FilesBusy, v.FilesStep = a.filesBusy, a.filesStep
+	v.FilesBusy, v.FilesStep, v.Updating = a.filesBusy, a.filesStep, a.updBusy
 	if w := a.deb.Waiting(); !w.IsZero() {
 		v.Waiting = w.UTC().Format(time.RFC3339)
 	}
@@ -790,6 +878,33 @@ func (a *App) SetDisks(list []string) error {
 }
 
 // SetLang — язык окна.
+// FolderOf — папка «Little Hub» на диске из списка дисков программы (пусто — активный). Чужой путь — ошибка: окно
+// открывает только свои папки.
+func (a *App) FolderOf(disk string) (string, error) {
+	cfg := a.Cfg.Get()
+	if disk == "" {
+		st, _, err := disks.Check(cfg.Disks, a.Space)
+		for _, d := range st {
+			if d.Active {
+				disk = d.Path
+			}
+		}
+		if disk == "" {
+			if err == nil {
+				err = disks.ErrNoDisk
+			}
+			return "", err
+		}
+	} else if !slices.Contains(cfg.Disks, disk) {
+		return "", errors.New("такого диска нет в списке")
+	}
+	dir := disks.Root(disk)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 func (a *App) SetLang(l string) error {
 	if l != "ru" && l != "en" {
 		return errors.New("язык — ru или en")

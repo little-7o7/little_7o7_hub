@@ -162,21 +162,26 @@ func (c *Client) Pair(ctx context.Context, code, name string) (Paired, error) {
 }
 
 // Flag — отпечаток данных хаба (из кэша CDN; меняется после каждой записи в хаб).
-func (c *Client) Flag(ctx context.Context, path string) (string, error) {
+// Flag — флаг хаба: V — отпечаток данных хаба (изменился — копия устарела), U — номер просьбы «Обновить программу»
+// из Настроек → «Компьютеры» (изменился — проверить обновление сейчас; у хаба старше — пусто).
+type Flag struct {
+	V string `json:"v"`
+	U string `json:"u"`
+}
+
+func (c *Client) Flag(ctx context.Context, path string) (Flag, error) {
 	if !strings.HasPrefix(path, "/api/pc/flag/") {
-		return "", errors.New("нет адреса флага: подключите компьютер заново")
+		return Flag{}, errors.New("нет адреса флага: подключите компьютер заново")
 	}
 	resp, err := c.do(ctx, "GET", path, nil, false)
 	if err != nil {
-		return "", err
+		return Flag{}, err
 	}
-	var f struct {
-		V string `json:"v"`
-	}
+	var f Flag
 	if err := readJSON(resp, &f); err != nil {
-		return "", err
+		return Flag{}, err
 	}
-	return f.V, nil
+	return f, nil
 }
 
 // Copy — копия базы хаба (зашифрована паролем копий) и что о ней сказал хаб.

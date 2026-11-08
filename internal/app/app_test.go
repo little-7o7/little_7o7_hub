@@ -40,6 +40,10 @@ type fakeHub struct {
 	projects string
 	answers  map[string]string
 	asked    []string
+	// ask — просьба «Обновить программу» во флаге; latest — версия в /api/pc/version, checks — сколько раз спросили.
+	ask    string
+	latest string
+	checks int
 }
 
 func (f *fakeHub) server(t *testing.T) *httptest.Server {
@@ -71,8 +75,14 @@ func (f *fakeHub) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /api/pc/flag/k", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]string{"v": f.version})
+		_ = json.NewEncoder(w).Encode(map[string]string{"v": f.version, "u": f.ask})
 	})
+	mux.HandleFunc("GET /api/pc/version", auth(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.checks++
+		_ = json.NewEncoder(w).Encode(hub.Release{Version: f.latest})
+	}))
 	mux.HandleFunc("GET /api/pc/copy", auth(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -441,4 +451,133 @@ func TestFilesDue(t *testing.T) {
 	if FilesDue(night.Add(-2*time.Hour), night) || !FilesDue(night.Add(-3*time.Hour), night) {
 		t.Fatal("ночью — раз в 3 часа")
 	}
+}
+
+func TestSyncFilesRoot(t *testing.T) {
+	// У Strassio один «бизнес»: файлы прямо в папке «Strassio», договоры — PDF.
+	now := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+	f := &fakeHub{
+		projects: `{"projects":[{"slug":"strassio","folder":"Strassio","copy":false,"ok":true,"businesses":[{"id":1,"slug":"strassio","name":"Strassio","kind":"plugin","full":true,"root":true,"ver":"v1","files":[{"key":"keys","folder":"","name":"Ключи.xlsx","refresh":true}]}]}]}`,
+		answers: map[string]string{
+			"strassio/excel?b=1&f=keys":            "keys",
+			"strassio/items?b=1":                   `{"groups":[{"kind":"client","folder":"Клиенты","archive":"Клиенты (архив)","files":["Всё о клиенте.xlsx"],"items":[{"id":5,"dir":"Ахмед","ver":"1","photos":[{"key":"c9","file":"Договор №1","ver":"9"}]}]}]}`,
+			"strassio/items?b=1&ids=5&kind=client": `{"items":[{"id":5,"files":[{"name":"Всё о клиенте.xlsx","data":"eA=="}]}],"more":[]}`,
+			"strassio/photo?b=1&c=9&p=5":           "%PDF-1.4",
+		},
+	}
+	a, disk := newApp(t, f, &now)
+	if err := a.SyncFiles(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(disk, "Little Hub", "Strassio")
+	if b, _ := os.ReadFile(filepath.Join(root, "Ключи.xlsx")); string(b) != "keys" {
+		t.Fatal("нет Ключи.xlsx в папке Strassio")
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "Клиенты", "Ахмед", "Всё о клиенте.xlsx")); string(b) != "x" {
+		t.Fatal("нет «Всё о клиенте»")
+	}
+	if _, err := os.Stat(filepath.Join(root, "strassio")); err == nil {
+		t.Fatal("лишняя папка бизнеса")
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "Клиенты", "Ахмед", "Договор №1.pdf")); string(b) != "%PDF-1.4" {
+		t.Fatal("нет договора PDF")
+	}
+}
+
+func TestUpdateAskFromHub(t *testing.T) {
+	now := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+	f := &fakeHub{copy: sample(t), day: "2026-11-08", version: "1", sources: `{}`, ask: "40", latest: "1.0.0"}
+	a, _ := newApp(t, f, &now)
+	a.Exe = filepath.Join(t.TempDir(), "LittleHub.exe")
+	checks := func() int {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.checks
+	}
+	wait := func(n int) {
+		t.Helper()
+		for i := 0; i < 200 && (checks() < n || a.View().Updating); i++ {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	ctx := context.Background()
+	// Просьба была до запуска — не в счёт.
+	a.tick(ctx)
+	time.Sleep(30 * time.Millisecond)
+	if checks() != 0 {
+		t.Fatal("старая просьба", checks())
+	}
+	// Новая — проверить обновление сейчас; новой версии нет — так и пишем.
+	f.mu.Lock()
+	f.ask = "41"
+	f.mu.Unlock()
+	now = now.Add(2 * time.Minute)
+	a.tick(ctx)
+	wait(1)
+	if checks() != 1 {
+		t.Fatal("не проверил", checks())
+	}
+	if !hasLog(a, "Хаб попросил обновить") || !hasLog(a, "у вас последняя (1.0.0)") {
+		t.Fatal(a.View().Log)
+	}
+	// Та же просьба — ещё раз не проверяем.
+	now = now.Add(2 * time.Minute)
+	a.tick(ctx)
+	time.Sleep(30 * time.Millisecond)
+	if checks() != 1 {
+		t.Fatal("повтор", checks())
+	}
+	// Кнопка в окне: есть новая версия, но файла для этой системы нет — ошибка видна в окне.
+	f.mu.Lock()
+	f.latest = "9.0.0"
+	f.mu.Unlock()
+	a.UpdateNow()
+	wait(2)
+	if v := a.View(); v.Latest != "9.0.0" || !strings.Contains(v.UpdateErr, "нет файла") || v.Updating {
+		t.Fatal(v.Latest, v.UpdateErr, v.Updating)
+	}
+}
+
+func TestUpdateNowNotInstalled(t *testing.T) {
+	now := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+	f := &fakeHub{copy: sample(t), day: "2026-11-08", version: "1", sources: `{}`, latest: "9.0.0"}
+	a, _ := newApp(t, f, &now)
+	a.UpdateNow()
+	if !hasLog(a, "не с места установки") || f.checks != 0 {
+		t.Fatal(a.View().Log)
+	}
+	if a.seeUpdateAsk("") {
+		t.Fatal("пустая просьба")
+	}
+}
+
+func TestFolderOf(t *testing.T) {
+	now := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+	f := &fakeHub{copy: sample(t), day: "2026-11-08", version: "1", sources: `{}`}
+	a, disk := newApp(t, f, &now)
+	dir, err := a.FolderOf("")
+	if err != nil || dir != filepath.Join(disk, "Little Hub") {
+		t.Fatal(dir, err)
+	}
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		t.Fatal("папки нет", err)
+	}
+	if a.View().Folder != dir {
+		t.Fatal(a.View().Folder)
+	}
+	if d, err := a.FolderOf(disk); err != nil || d != dir {
+		t.Fatal(d, err)
+	}
+	if _, err := a.FolderOf(t.TempDir()); err == nil {
+		t.Fatal("чужой путь открылся")
+	}
+}
+
+func hasLog(a *App, s string) bool {
+	for _, l := range a.View().Log {
+		if strings.Contains(l.Text, s) {
+			return true
+		}
+	}
+	return false
 }

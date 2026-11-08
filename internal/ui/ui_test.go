@@ -112,6 +112,24 @@ func TestAccess(t *testing.T) {
 	if r := req(t, s, "POST", "/api/pair", "", post, []byte(`{"code":"1","hub":"https://hub.test"}`)); r.StatusCode != 400 {
 		t.Fatal(r.StatusCode)
 	}
+	// «Открыть папку»: только диск из списка программы; пусто — где сейчас копии.
+	var opened []string
+	s.OpenFolder = func(p string) error { opened = append(opened, p); return nil }
+	if r := req(t, s, "POST", "/api/open", "", post, []byte(`{"disk":"`+t.TempDir()+`"}`)); r.StatusCode != 400 {
+		t.Fatal("чужая папка", r.StatusCode)
+	}
+	if r := req(t, s, "POST", "/api/open", "", post, nil); r.StatusCode != 200 {
+		t.Fatal(r.StatusCode)
+	}
+	if r := req(t, s, "POST", "/api/open", "", post, []byte(`{"disk":"`+d+`"}`)); r.StatusCode != 200 {
+		t.Fatal(r.StatusCode)
+	}
+	if len(opened) != 2 || opened[0] != disks.Root(d) || opened[1] != disks.Root(d) {
+		t.Fatal(opened)
+	}
+	if r := req(t, s, "POST", "/api/update", "", post, nil); r.StatusCode != 200 {
+		t.Fatal(r.StatusCode)
+	}
 	for _, p := range []string{"/app.js", "/app.css", "/icon.png"} {
 		if r := req(t, s, "GET", p, "", ck, nil); r.StatusCode != 200 {
 			t.Fatal(p, r.StatusCode)

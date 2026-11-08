@@ -43,11 +43,13 @@ type PcFile struct {
 
 // Business — бизнес проекта (магазин, гостиница): ver меняется при любой записи в нём и в новый день.
 type Business struct {
-	ID    int      `json:"id"`
-	Slug  string   `json:"slug"`
-	Name  string   `json:"name"`
-	Kind  string   `json:"kind"`
-	Full  bool     `json:"full"`
+	ID   int    `json:"id"`
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	Full bool   `json:"full"`
+	// Root — у проекта один «бизнес» (Strassio): файлы прямо в папке проекта, без папки бизнеса.
+	Root  bool     `json:"root,omitempty"`
 	Ver   string   `json:"ver"`
 	Files []PcFile `json:"files"`
 }

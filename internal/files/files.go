@@ -386,6 +386,7 @@ func CleanupPrefix(dir, prefix, today string, days int) int {
 
 // ---------- Папки ----------
 
+// Photo — фото товара или цвета, файл договора (PDF): расширение — по типу ответа.
 type Photo struct {
 	Key  string `json:"key"`
 	File string `json:"file"`
@@ -466,6 +467,8 @@ func photoExt(t string) string {
 		return ".webp"
 	case "image/gif":
 		return ".gif"
+	case "application/pdf":
+		return ".pdf"
 	}
 	return ".jpg"
 }

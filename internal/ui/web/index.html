@@ -44,8 +44,13 @@
     </section>
 
     <section class="card">
-      <h2 data-t="filesTitle"></h2>
+      <div class="head">
+        <h2 data-t="filesTitle"></h2>
+        <button id="openFolder" class="btn btn-small" data-t="openFolder"></button>
+      </div>
       <p class="muted small" data-t="filesText"></p>
+      <p id="folder" class="small"></p>
+      <p id="openErr" class="err" hidden></p>
       <p id="filesStep" class="muted small"></p>
       <ul id="files" class="list"></ul>
     </section>
@@ -84,10 +89,17 @@
   </div>
 
   <section class="card">
+    <div class="head">
+      <h2 data-t="progTitle"></h2>
+      <button id="updNow" class="btn btn-small" data-t="updNow"></button>
+    </div>
+    <p id="ver" class="muted small"></p>
+  </section>
+
+  <section class="card">
     <h2 data-t="logTitle"></h2>
     <ul id="log" class="log"></ul>
   </section>
-  <p id="ver" class="muted small center"></p>
 </main>
 <script src="/app.js"></script>
 </body>

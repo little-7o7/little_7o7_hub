@@ -48,6 +48,8 @@ type Config struct {
 	RatesAt string `json:"ratesAt,omitempty"`
 	// Files — файлы проектов (Excel, папки клиентов, поставщиков, мастеров, товаров с фото).
 	Files *Files `json:"files,omitempty"`
+	// Shortcuts — ярлыки в «Пуске» и на рабочем столе уже сделаны (делаем один раз: убранный ярлык не возвращаем).
+	Shortcuts bool `json:"shortcuts,omitempty"`
 }
 
 // Store — config.json с замком: окно и фоновая работа меняют его из разных горутин.

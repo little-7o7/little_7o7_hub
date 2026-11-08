@@ -15,6 +15,7 @@ const T = {
     paired: "Подключён: {n} · {h}", notPaired: "Не подключён", decDone: "Готово: файл скачан", lastErr: "Ошибка", busy: "Сохраняю копию…",
     filesTitle: "Файлы проектов", filesText: "Excel, папки клиентов, поставщиков, мастеров и товаров с фото — в папке «Little Hub» на диске.",
     filesNone: "Ещё не раскладывались", filesBusy: "Раскладываю…", filesLine: "{t} · бизнесов {b} · записано файлов {f} · папок {i} · фото {p}", locked: "Открыты в Excel и не обновились: {n}",
+    openFolder: "Открыть папку", folder: "Папка: {p}", open: "Открыть", progTitle: "Программа", updNow: "Обновить программу", updating: "Проверяю…", latestOk: "последняя",
   },
   en: {
     pairTitle: "Connect to the hub", pairText: "Hub → Settings → Computers → “Add computer”. Type the code from there.", pairBtn: "Connect",
@@ -29,6 +30,7 @@ const T = {
     paired: "Connected: {n} · {h}", notPaired: "Not connected", decDone: "Done: file downloaded", lastErr: "Error", busy: "Saving a copy…",
     filesTitle: "Project files", filesText: "Excel, folders of clients, suppliers, masters and products with photos — in the “Little Hub” folder on the disk.",
     filesNone: "Not laid out yet", filesBusy: "Laying out…", filesLine: "{t} · businesses {b} · files written {f} · folders {i} · photos {p}", locked: "Open in Excel and not updated: {n}",
+    openFolder: "Open folder", folder: "Folder: {p}", open: "Open", progTitle: "Program", updNow: "Update the program", updating: "Checking…", latestOk: "latest",
   },
 };
 
@@ -139,6 +141,7 @@ function render(s) {
           el(
             "div",
             { class: "acts" },
+            k.ok ? el("button", { class: "btn btn-small", type: "button", onclick: () => openFolder(k.path, "diskErr") }, t("open")) : null,
             i > 0 ? el("button", { class: "btn btn-small", type: "button", onclick: () => setDisks([...list.slice(0, i - 1), list[i], list[i - 1], ...list.slice(i + 1)]) }, t("up")) : null,
             list.length > 1 ? el("button", { class: "btn btn-small btn-danger", type: "button", onclick: () => setDisks(list.filter((_, j) => j !== i)) }, t("remove")) : null,
           ),
@@ -158,7 +161,11 @@ function render(s) {
 
   const l = $("log");
   l.replaceChildren(...(s.log || []).slice().reverse().map((x) => el("li", {}, el("time", {}, time(x.at)), el("span", { class: x.bad ? "bad" : "" }, x.text))));
-  $("ver").textContent = `${t("version")} ${s.version}${s.latest && s.latest !== s.version ? " · " + t("update", { v: s.latest }) : ""}${s.updateError ? " · " + s.updateError : ""}`;
+  $("ver").textContent = `${t("version")} ${s.version}${s.latest && s.latest !== s.version ? " · " + t("update", { v: s.latest }) : s.latest === s.version ? " · " + t("latestOk") : ""}${s.updateError ? " · " + s.updateError : ""}`;
+  $("updNow").disabled = !s.paired || s.updating;
+  $("updNow").textContent = s.updating ? t("updating") : t("updNow");
+  $("folder").textContent = s.folder ? t("folder", { p: s.folder }) : "";
+  $("openFolder").disabled = !s.folder;
 }
 
 async function refresh() {
@@ -166,6 +173,15 @@ async function refresh() {
     const r = await fetch("/api/state");
     if (r.ok) render(await r.json());
   } catch {}
+}
+
+async function openFolder(disk, errId) {
+  try {
+    await post("/api/open", { disk });
+    showErr(errId, "");
+  } catch (e) {
+    showErr(errId, e.message);
+  }
 }
 
 async function setDisks(list) {
@@ -195,6 +211,11 @@ $("diskForm").addEventListener("submit", (e) => {
   if (!p || !state) return;
   $("diskPath").value = "";
   setDisks([...state.disks.map((x) => x.path), p]);
+});
+$("openFolder").addEventListener("click", () => openFolder("", "openErr"));
+$("updNow").addEventListener("click", async () => {
+  await post("/api/update").catch(() => {});
+  refresh();
 });
 $("saveNow").addEventListener("click", async () => {
   await post("/api/save").catch(() => {});
