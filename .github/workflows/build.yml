@@ -59,8 +59,9 @@ jobs:
           name: mac
           path: dist/
 
+  # Mac не собрался — выпуск всё равно выходит с файлом для Windows (хаб берёт то, что есть в SHA256SUMS).
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.test.result == 'success'
     needs: [test, mac]
     runs-on: ubuntu-latest
     permissions:
@@ -76,10 +77,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd dist
-          sha256sum LittleHub-windows-amd64.exe LittleHub-darwin-arm64 LittleHub-darwin-amd64 > SHA256SUMS
+          FILES="$(ls LittleHub-windows-amd64.exe LittleHub-darwin-arm64 LittleHub-darwin-amd64 2>/dev/null)"
+          sha256sum $FILES > SHA256SUMS
           cat SHA256SUMS
           git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           NOTES="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
           [ -n "$NOTES" ] || NOTES="Little Hub $GITHUB_REF_NAME"
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "Little Hub $GITHUB_REF_NAME" --notes "$NOTES" \
-            LittleHub-windows-amd64.exe LittleHub-darwin-arm64 LittleHub-darwin-amd64 SHA256SUMS
+            $FILES SHA256SUMS
