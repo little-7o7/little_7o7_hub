@@ -87,6 +87,8 @@ type App struct {
 	watch   map[string]*projWatch
 	usage   map[string]hub.Usage
 	usageAt time.Time
+	// programsTry — когда последний раз раскладывали «Программы» (с ошибкой — ещё раз через 3 часа).
+	programsTry time.Time
 	// Окно «Файлы»: пароль копий (15 минут, только в памяти).
 	keys   *fileseal.Keys
 	keysAt time.Time
@@ -469,6 +471,7 @@ func (a *App) syncFiles(ctx context.Context, only string, force bool) error {
 			a.synced(p.Slug, marks[p.Slug], fresh)
 		}
 		state.Projects[p.Slug] = config.ProjectFiles{Businesses: res.Businesses, Files: res.Files, Items: res.Items, Photos: res.Photos, Media: res.Media, Locked: res.Locked, Errors: res.Errors}
+		a.countToday(p.Slug, res)
 		if res.Files+res.Photos+res.Media > 0 || len(res.Errors) > 0 {
 			media := ""
 			if res.Media > 0 {
@@ -485,6 +488,8 @@ func (a *App) syncFiles(ctx context.Context, only string, force bool) error {
 		a.prune(root, list, disk)
 		a.measure(root, list)
 		a.keepProgram(root)
+		a.programs(ctx, c, root)
+		a.writeToday(root, list)
 	}
 	a.step("")
 	if stop == nil {

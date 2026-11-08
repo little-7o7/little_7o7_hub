@@ -356,7 +356,7 @@ func (a *App) measure(root string, list []hub.FileProject) {
 	if !due {
 		return
 	}
-	folders := map[string]string{HubProject.Slug: HubProject.Folder, "old": files.OldFolder}
+	folders := map[string]string{HubProject.Slug: HubProject.Folder, "old": files.OldFolder, "programs": files.ProgramsFolder}
 	for _, p := range list {
 		if files.SlugRe.MatchString(p.Slug) && files.Ok(p.Folder) {
 			folders[p.Slug] = p.Folder

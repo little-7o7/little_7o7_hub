@@ -166,4 +166,15 @@ func TestVaultPlain(t *testing.T) {
 	if fl, _ := a.Browse(""); fl.Sealed {
 		t.Fatal("ключа нет")
 	}
+	// Установщик из «Программ» окно только показывает в папке, не запускает.
+	exe := filepath.Join(disk, "Little Hub", "Программы", "Little Hub", "LittleHub-1.2.1-windows.exe")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, []byte("MZ"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if o, err := a.OpenFile("Программы/Little Hub/LittleHub-1.2.1-windows.exe"); err != nil || !o.Reveal || o.Path != exe {
+		t.Fatal("установщик открыт, а не показан:", o, err)
+	}
 }

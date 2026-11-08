@@ -214,6 +214,10 @@ func (a *App) OpenFile(rel string) (Opened, error) {
 		if !isRegular(full) {
 			return Opened{}, os.ErrNotExist
 		}
+		// Установщик из «Программ» окно не запускает — показывает в папке: запустить его — решение человека.
+		if r := filepath.ToSlash(rel); r == files.ProgramsFolder || strings.HasPrefix(r, files.ProgramsFolder+"/") {
+			return Opened{Path: full, Reveal: true}, nil
+		}
 		return Opened{Path: full}, nil // открытый файл (пароль копий не задан) — прямо с диска
 	}
 	keys := a.keysNow()

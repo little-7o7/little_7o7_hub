@@ -57,6 +57,25 @@ type Config struct {
 	Lock *fileseal.Lock `json:"lock,omitempty"`
 	// CheckedAt — когда последний раз проверяли копии баз (раз в неделю, RFC 3339).
 	CheckedAt string `json:"checkedAt,omitempty"`
+	// ProgramsDay — день (по Ташкенту), когда «Программы» разложены без ошибок: раз в день.
+	ProgramsDay string `json:"programsDay,omitempty"`
+	// Today — что записано за сегодня (по Ташкенту): для «Что сохранилось сегодня.txt».
+	Today *Today `json:"today,omitempty"`
+}
+
+// Today — записано за день по проектам (все раскладки дня вместе) и в «Программы».
+type Today struct {
+	Day      string              `json:"day"`
+	Projects map[string]DayCount `json:"projects"`
+	Programs int                 `json:"programs,omitempty"`
+}
+
+// DayCount — файлов, папок, фото и «Фото базы» записано за день.
+type DayCount struct {
+	Files  int `json:"files,omitempty"`
+	Items  int `json:"items,omitempty"`
+	Photos int `json:"photos,omitempty"`
+	Media  int `json:"media,omitempty"`
 }
 
 // Store — config.json с замком: окно и фоновая работа меняют его из разных горутин.
