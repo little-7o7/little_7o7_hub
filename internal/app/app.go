@@ -89,8 +89,6 @@ type App struct {
 	usageAt time.Time
 	// programsTry — когда последний раз раскладывали «Программы» (с ошибкой — ещё раз через 3 часа).
 	programsTry time.Time
-	// codeTry — когда последний раз раскладывали «Код» (раз в 3 часа, с ошибкой — тоже через 3 часа).
-	codeTry time.Time
 	// Окно «Файлы»: пароль копий (15 минут, только в памяти).
 	keys   *fileseal.Keys
 	keysAt time.Time
@@ -491,7 +489,6 @@ func (a *App) syncFiles(ctx context.Context, only string, force bool) error {
 		a.measure(root, list)
 		a.keepProgram(root)
 		a.programs(ctx, c, root)
-		a.code(ctx, c, disk)
 		a.writeToday(root, list)
 	}
 	a.step("")

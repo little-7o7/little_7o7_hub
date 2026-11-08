@@ -45,7 +45,6 @@ func (a *App) addToday(f func(*config.Today)) {
 		t := config.Today{Day: today, Projects: map[string]config.DayCount{}}
 		if x.Today != nil && x.Today.Day == today {
 			t.Programs = x.Today.Programs
-			t.Code = x.Today.Code
 			for k, v := range x.Today.Projects {
 				t.Projects[k] = v
 			}
@@ -83,39 +82,6 @@ func (a *App) programs(ctx context.Context, c *hub.Client, root string) {
 		return
 	}
 	_ = a.Cfg.Update(func(x *config.Config) { x.ProgramsDay = today })
-}
-
-// codeEvery — «Код» не чаще раза в 3 часа: архив — только после нового push, Excel — раз в день и после push.
-const codeEvery = 3 * time.Hour
-
-// code — «Little Hub/Код» (пункты 89–90): репозитории владельца, архив кода и Excel под паролем копий.
-func (a *App) code(ctx context.Context, c *hub.Client, disk *files.Disk) {
-	cfg := a.Cfg.Get()
-	last, _ := time.Parse(time.RFC3339, cfg.CodeAt)
-	a.mu.Lock()
-	due := a.now().Sub(last) >= codeEvery && a.now().Sub(a.codeTry) >= codeEvery
-	if due {
-		a.codeTry = a.now()
-	}
-	a.mu.Unlock()
-	if !due {
-		return
-	}
-	a.step(files.CodeFolder)
-	res, err := files.Code(ctx, c, disk, a.now())
-	if n := res.Zips + res.Excels; n > 0 {
-		a.addToday(func(t *config.Today) { t.Code += n })
-		a.Logf(false, "Код: архивов %d, Excel %d (репозиториев %d)", res.Zips, res.Excels, res.Repos)
-	}
-	if err != nil || len(res.Errors) > 0 {
-		msg := strings.Join(res.Errors, "; ")
-		if err != nil {
-			msg = err.Error()
-		}
-		a.Logf(true, "Код: %s", msg)
-		return
-	}
-	_ = a.Cfg.Update(func(x *config.Config) { x.CodeAt = a.now().UTC().Format(time.RFC3339) })
 }
 
 // writeToday — «Что сохранилось сегодня.txt» в корне «Little Hub».
@@ -181,10 +147,6 @@ func (a *App) writeToday(root string, list []hub.FileProject) {
 	if t.Programs > 0 {
 		wrote = true
 		fmt.Fprintf(&b, "• %s: файлов %d\n", files.ProgramsFolder, t.Programs)
-	}
-	if t.Code > 0 {
-		wrote = true
-		fmt.Fprintf(&b, "• %s: файлов %d (архивы кода и Excel репозиториев)\n", files.CodeFolder, t.Code)
 	}
 	if !wrote {
 		b.WriteString("• Сегодня ничего нового: всё, что есть в проектах, уже лежит здесь.\n")
