@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -153,6 +154,28 @@ func TestRecordAndVerify(t *testing.T) {
 	}
 	if n, _ := Verify(t.TempDir(), p, 4, nil); n != 0 {
 		t.Fatal("пусто")
+	}
+}
+
+func TestPruneKeepsFirstOfMonthForAYear(t *testing.T) {
+	root := t.TempDir()
+	p := Project{Slug: "sarpo", Folder: "Sarpo Business", Ext: "l7copy"}
+	for _, d := range []string{"2025-10-01", "2026-01-01", "2026-06-01", "2026-06-02", "2026-10-01", "2026-11-05"} {
+		rel, _ := Rel(p, d)
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755)
+		_ = os.WriteFile(filepath.Join(root, rel), []byte("x"), 0o644)
+	}
+	now := time.Date(2026, 11, 17, 6, 0, 0, 0, time.UTC)
+	// 30 дней — 05.11; 1-е числа моложе года — 01.01, 01.06, 01.10; 02.06 и 01.10.2025 (старше года) — удалить.
+	if n := Prune(root, p, now, 30); n != 2 {
+		t.Fatal("удалено", n)
+	}
+	var got []string
+	for _, d := range List(root, p) {
+		got = append(got, d.Day)
+	}
+	if strings.Join(got, ",") != "2026-01-01,2026-06-01,2026-10-01,2026-11-05" {
+		t.Fatal(got)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/little-7o7/little_7o7_hub/internal/config"
+	"github.com/little-7o7/little_7o7_hub/internal/days"
 	"github.com/little-7o7/little_7o7_hub/internal/disks"
 	"github.com/little-7o7/little_7o7_hub/internal/files"
 	"github.com/little-7o7/little_7o7_hub/internal/hub"
@@ -530,13 +531,24 @@ func TestSyncFiles(t *testing.T) {
 }
 
 func TestFilesDue(t *testing.T) {
-	day := time.Date(2026, 11, 8, 7, 0, 0, 0, time.UTC)    // 12:00 в Ташкенте
-	night := time.Date(2026, 11, 8, 20, 0, 0, 0, time.UTC) // 01:00
-	if !FilesDue(time.Time{}, day) || FilesDue(day.Add(-29*time.Minute), day) || !FilesDue(day.Add(-30*time.Minute), day) {
-		t.Fatal("днём — раз в 30 минут")
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 17, h, m, 0, 0, days.Tashkent) }
+	if !FilesDue(time.Time{}, at(12, 0)) {
+		t.Fatal("при запуске — сразу")
 	}
-	if FilesDue(night.Add(-2*time.Hour), night) || !FilesDue(night.Add(-3*time.Hour), night) {
-		t.Fatal("ночью — раз в 3 часа")
+	// Разложили утром при включении — днём больше не раскладываем, следующий раз — после 03:00 ночи.
+	if FilesDue(at(9, 0), at(23, 59)) || FilesDue(at(9, 0), at(9, 0).AddDate(0, 0, 1).Add(-6*time.Hour-time.Minute)) {
+		t.Fatal("днём и до 03:00 — нет")
+	}
+	if !FilesDue(at(9, 0), at(3, 0).AddDate(0, 0, 1)) || !FilesDue(at(9, 0), at(15, 0).AddDate(0, 0, 1)) {
+		t.Fatal("после 03:00 следующего дня — да")
+	}
+	// Разложили ночью в 03:05 — до следующей ночи нет.
+	if FilesDue(at(3, 5), at(22, 0)) || FilesDue(at(3, 5), at(2, 59).AddDate(0, 0, 1)) || !FilesDue(at(3, 5), at(3, 0).AddDate(0, 0, 1)) {
+		t.Fatal("раз в сутки")
+	}
+	// Ночь до 03:00 — прошлая раскладка до вчерашних 03:00: пора.
+	if !FilesDue(at(2, 0).AddDate(0, 0, -1), at(1, 0)) {
+		t.Fatal("пропущенная ночь")
 	}
 }
 
