@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -164,9 +165,13 @@ var monthRe = regexp.MustCompile(`^\d{4}-\d{2}$`)
 // Since — день на n дней раньше сегодняшнего (по Ташкенту).
 func Since(now time.Time, n int) string { return Today(now.AddDate(0, 0, -n)) }
 
-// Prune — файлы дней старше keep дней (владелец 2026-11-08: «1 mesyats») удалить, пустые папки месяцев — тоже.
-// Считаем и от сегодня, и от самой свежей копии на диске — что раньше: часы компьютера ушли вперёд или хаб месяц
-// не отвечал — последние копии всё равно остаются. Ответ — сколько удалено.
+// KeepMonthly — копия за 1-е число месяца хранится год (владелец 2026-11-17: правило «3-2-1» для копий).
+const KeepMonthly = 365
+
+// Prune — файлы дней старше keep дней (владелец 2026-11-08: «1 mesyats») удалить, пустые папки месяцев — тоже; копию
+// за 1-е число месяца — только старше KeepMonthly дней. Считаем и от сегодня, и от самой свежей копии на диске — что
+// раньше: часы компьютера ушли вперёд или хаб месяц не отвечал — последние копии всё равно остаются. Ответ — сколько
+// удалено.
 func Prune(root string, p Project, now time.Time, keep int) int {
 	list := List(root, p)
 	if len(list) == 0 {
@@ -176,10 +181,11 @@ func Prune(root string, p Project, now time.Time, keep int) int {
 	if t, err := time.ParseInLocation("2006-01-02", list[len(list)-1].Day, Tashkent); err == nil {
 		oldest = min(oldest, Today(t.AddDate(0, 0, -keep).Add(12*time.Hour)))
 	}
+	year := Since(now, KeepMonthly)
 	n := 0
 	dirs := map[string]bool{}
 	for _, d := range list {
-		if d.Day >= oldest {
+		if d.Day >= oldest || (strings.HasSuffix(d.Day, "-01") && d.Day >= year) {
 			continue
 		}
 		if os.Remove(d.Path) == nil {
