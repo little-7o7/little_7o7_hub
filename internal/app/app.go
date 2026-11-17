@@ -31,10 +31,11 @@ import (
 var HubProject = days.Project{Slug: "hub", Folder: "Хаб", Ext: "l7copy"}
 
 const (
-	// Файлы проектов: днём (8:00–22:00 по Ташкенту) — раз в 30 минут, ночью — раз в 3 часа; бизнес, где ничего не
-	// менялось, проект не спрашиваем.
-	FilesDay     = 30 * time.Minute
-	FilesNight   = 3 * time.Hour
+	// Файлы проектов — раз в сутки ночью (с FilesAt часов по Ташкенту) и при запуске программы (владелец 2026-11-17:
+	// «nam nado sekonomit», «izmeneniya ne doljni propast» — каждая раскладка будит базы хаба и проекта, а Neon берёт
+	// деньги за каждый час работы базы). Ночная раскладка берёт всё, что изменилось за день. Нужно сейчас — «Сохранить
+	// сейчас» в программе или «Сохранить сейчас на всех» в хабе.
+	FilesAt      = 3
 	filesCheck   = 5 * time.Minute
 	FlagEvery    = time.Minute
 	UpdateEvery  = 6 * time.Hour
@@ -330,17 +331,18 @@ func (a *App) copyHub(ctx context.Context) error {
 	return nil
 }
 
-// FilesDue — пора ли раскладывать файлы проектов: днём раз в 30 минут, ночью раз в 3 часа.
+// FilesDue — пора ли раскладывать файлы проектов: при запуске программы и раз в сутки, первый раз после FilesAt часов
+// ночи по Ташкенту (компьютер был выключен ночью — разложит при включении).
 func FilesDue(last, now time.Time) bool {
 	if last.IsZero() {
 		return true
 	}
-	h := now.In(days.Tashkent).Hour()
-	every := FilesNight
-	if h >= 8 && h < 22 {
-		every = FilesDay
+	t := now.In(days.Tashkent)
+	at := time.Date(t.Year(), t.Month(), t.Day(), FilesAt, 0, 0, 0, days.Tashkent)
+	if t.Before(at) {
+		at = at.AddDate(0, 0, -1)
 	}
-	return now.Sub(last) >= every
+	return last.Before(at)
 }
 
 // SyncFiles — файлы всех проектов на активный диск: Excel, папки клиентов, поставщиков, мастеров, товаров с фото, и
@@ -825,7 +827,8 @@ func (a *App) tick(ctx context.Context) {
 }
 
 // Run — работа до выхода: копия при запуске (владелец: «pri vklyuchenii kompyutera, doljen vzyat posledniye
-// izmeneniya»), флаг хаба раз в минуту, флаги проектов раз в 30 секунд, курсы раз в 3 часа, обновление раз в 6 часов.
+// izmeneniya»), флаг хаба раз в минуту, файлы проектов раз в ночь, курсы раз в 3 часа, обновление раз в 6 часов.
+// «Сразу после изменений» по флагам проектов выключено (2026-11-17, экономия баз): раскладка — ночью или по кнопке.
 func (a *App) Run(ctx context.Context) {
 	a.Kick()
 	a.CleanOpen(true) // расшифрованное окном «Файлы» до прошлого выхода (программу закрыли не через «Выход»)
@@ -840,8 +843,6 @@ func (a *App) Run(ctx context.Context) {
 	defer statT.Stop()
 	filesT := time.NewTicker(filesCheck)
 	defer filesT.Stop()
-	projT := time.NewTicker(ProjectFlagEvery)
-	defer projT.Stop()
 	first := time.After(time.Minute)
 	a.mu.Lock()
 	if a.kick == nil {
@@ -866,10 +867,6 @@ func (a *App) Run(ctx context.Context) {
 			}
 		case <-flagT.C:
 			a.tick(ctx)
-		case <-projT.C:
-			if due := a.pollProjects(ctx); len(due) > 0 {
-				go a.syncDue(ctx, due)
-			}
 		case <-first:
 			if a.Paired() {
 				_ = a.SendRates(ctx)
