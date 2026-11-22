@@ -41,7 +41,7 @@ type Files struct {
 }
 
 type Config struct {
-	Hub      string          `json:"hub"`            // https://hub.2-29-213-167.sslip.io
+	Hub      string          `json:"hub"`            // https://little7o7.com
 	Flag     string          `json:"flag,omitempty"` // /api/pc/flag/<ключ>
 	DeviceID int             `json:"deviceId,omitempty"`
 	Name     string          `json:"name,omitempty"`
@@ -113,21 +113,23 @@ func Load(dir string) (*Store, error) {
 	if s.c.Copies == nil {
 		s.c.Copies = map[string]Copy{}
 	}
-	// Хаб переехал с Vercel на свой сервер (2026-11-22), старый адрес выключается: компьютер, привязанный к старому
-	// адресу, ходит на новый — ключ и привязка те же (одна база хаба).
-	if strings.TrimRight(s.c.Hub, "/") == OldHub {
-		if err := s.Update(func(c *Config) { c.Hub = NewHub }); err != nil {
-			return nil, err
+	// Хаб переехал (Vercel → свой сервер → свой домен, 2026-11-22): компьютер, привязанный к старому адресу, ходит
+	// на новый — ключ и привязка те же (одна база хаба).
+	for _, old := range OldHubs {
+		if strings.TrimRight(s.c.Hub, "/") == old {
+			if err := s.Update(func(c *Config) { c.Hub = NewHub }); err != nil {
+				return nil, err
+			}
+			break
 		}
 	}
 	return s, nil
 }
 
-// Старый и новый адрес хаба (переезд с Vercel на свой сервер, 2026-11-22).
-const (
-	OldHub = "https://little-7o7.vercel.app"
-	NewHub = "https://hub.2-29-213-167.sslip.io"
-)
+// Старые адреса хаба — Vercel и sslip.io своего сервера — и новый, свой домен (2026-11-22).
+var OldHubs = []string{"https://little-7o7.vercel.app", "https://hub.2-29-213-167.sslip.io"}
+
+const NewHub = "https://little7o7.com"
 
 // Get — копия настроек.
 func (s *Store) Get() Config {

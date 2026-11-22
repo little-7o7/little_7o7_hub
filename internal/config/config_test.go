@@ -39,9 +39,10 @@ func TestLoadUpdate(t *testing.T) {
 	}
 }
 
-// Переезд хаба с Vercel (2026-11-22): старый адрес в config.json — новый, и он записан в файл; другие адреса не трогаем.
+// Переезд хаба (Vercel, sslip.io → little7o7.com, 2026-11-22): старый адрес в config.json — новый, и он записан в файл;
+// другие адреса не трогаем.
 func TestLoadMovesOldHub(t *testing.T) {
-	for _, old := range []string{OldHub, OldHub + "/"} {
+	for _, old := range []string{OldHubs[0], OldHubs[0] + "/", OldHubs[1], OldHubs[1] + "/"} {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"hub":"`+old+`","deviceId":3,"disks":["D:\\"]}`), 0o600); err != nil {
 			t.Fatal(err)

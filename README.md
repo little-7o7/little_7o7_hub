@@ -8,7 +8,7 @@
 Хаб → Настройки → Компьютеры → «Добавить компьютер»: там код и команда.
 
 - Windows — «Скачать установщик» в хабе (LittleHub-Setup.exe с адресом хаба и кодом в хвосте файла, `internal/setup`), или PowerShell: `irm https://little-7o7.vercel.app/pc/install.ps1?code=… | iex`
-- Mac — Терминал: `curl -fsSL "https://little-7o7.vercel.app/pc/install.sh?code=…" | sh`
+- Mac — Терминал: `curl -fsSL "https://little7o7.com/pc/install.sh?code=…" | sh`
 
 Программа ставится в папку пользователя (без прав администратора), запускается при входе, значок — у часов (Windows)
 или в строке меню (Mac). Копии: `<диск>/Little Hub/Хаб/Копии базы/<месяц>/hub-<день>.l7copy`, открываются паролем
