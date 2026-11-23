@@ -22,6 +22,9 @@ const T = {
     vRoot: "Little Hub", vEmpty: "Пусто", vPass: "Введите пароль копий, чтобы открыть файл.", vCopy: "копия базы", vLock: "под паролем",
     vExportAsk: "Расшифровать эту папку целиком? Файлы лягут рядом с «Little Hub» без пароля — после работы их лучше удалить.",
     vExported: "Готово: {n} файлов в {p}", vWorking: "Расшифровываю…",
+    joinTitle: "Собрать копию из частей", joinText: "Копия больше 50 МБ приходит в Telegram частями: …l7copy.part1-of-3, part2-of-3… Скачайте все части в одну папку и вставьте путь к любой из них — копия ляжет рядом.",
+    joinPh: "Путь к части: C:\\Users\\…\\Downloads\\Telegram Desktop\\hub-2026-11-23.l7copy.part1-of-3", joinBtn: "Собрать", joinWorking: "Собираю…",
+    joinDone: "Готово: {p} · {s}. SHA-256: {h} — сверьте с подписью последней части в Telegram.",
   },
   en: {
     pairTitle: "Connect to the hub", pairText: "Hub → Settings → Computers → “Add computer”. Type the code from there.", pairBtn: "Connect",
@@ -43,6 +46,9 @@ const T = {
     vRoot: "Little Hub", vEmpty: "Empty", vPass: "Type the backup password to open the file.", vCopy: "database copy", vLock: "locked",
     vExportAsk: "Decrypt this whole folder? The files will be placed next to “Little Hub” without a password — better delete them when done.",
     vExported: "Done: {n} files in {p}", vWorking: "Decrypting…",
+    joinTitle: "Join a copy from parts", joinText: "A copy over 50 MB arrives in Telegram in parts: …l7copy.part1-of-3, part2-of-3… Download all parts into one folder and paste the path to any of them — the copy is placed next to them.",
+    joinPh: "Path to a part: C:\\Users\\…\\Downloads\\Telegram Desktop\\hub-2026-11-23.l7copy.part1-of-3", joinBtn: "Join", joinWorking: "Joining…",
+    joinDone: "Done: {p} · {s}. SHA-256: {h} — compare it with the caption of the last part in Telegram.",
   },
 };
 
@@ -266,6 +272,21 @@ $("vExport").addEventListener("click", async () => {
   } catch (x) {
     d.hidden = true;
     showErr("vErr", /пароль|password/i.test(x.message) ? t("vPass") : x.message);
+  }
+});
+
+$("joinForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const d = $("joinDone");
+  d.hidden = false;
+  d.textContent = t("joinWorking");
+  try {
+    const j = await post("/api/files/join", { path: $("joinPath").value });
+    d.textContent = t("joinDone", { p: j.path, s: size(j.bytes), h: j.sha256 });
+    showErr("joinErr", "");
+  } catch (x) {
+    d.hidden = true;
+    showErr("joinErr", x.message);
   }
 });
 

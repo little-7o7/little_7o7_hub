@@ -23,6 +23,7 @@ import (
 
 	"github.com/little-7o7/little_7o7_hub/internal/app"
 	"github.com/little-7o7/little_7o7_hub/internal/copyfmt"
+	"github.com/little-7o7/little_7o7_hub/internal/files"
 )
 
 //go:embed web
@@ -205,6 +206,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /api/files/open", s.openFile)
 	mux.HandleFunc("POST /api/files/export", s.export)
+	mux.HandleFunc("POST /api/files/join", s.join)
 	mux.HandleFunc("POST /api/quit", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		if s.Quit != nil {
@@ -411,4 +413,17 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"folder": dir, "files": n})
+}
+
+// join — «Собрать копию из частей»: путь к одной части из Telegram → копия рядом с частями и её SHA-256.
+func (s *Server) join(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Path string }
+	_ = json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&b)
+	j, err := files.JoinParts(b.Path)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	s.App.Logf(false, "Копия собрана из %d частей: %s · SHA-256 %s", j.Parts, j.Path, j.Sha256)
+	writeJSON(w, 200, j)
 }

@@ -2,11 +2,15 @@ package ui
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -233,5 +237,28 @@ func TestFilesWindow(t *testing.T) {
 	_, _ = b.ReadFrom(r.Body)
 	if r.StatusCode != 401 || !strings.Contains(b.String(), `"password":true`) {
 		t.Fatal("нужен пароль", r.StatusCode, b.String())
+	}
+}
+
+func TestJoinParts(t *testing.T) {
+	s, _ := server(t)
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "hub.l7copy.part1-of-2"), []byte("abc"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "hub.l7copy.part2-of-2"), []byte("d"), 0o644)
+	post := map[string]string{"X-LH-Key": s.Key, "X-LH": "1"}
+	body, _ := json.Marshal(map[string]string{"path": filepath.Join(dir, "hub.l7copy.part2-of-2")})
+	if r := req(t, s, "POST", "/api/files/join", "", map[string]string{"X-LH-Key": s.Key}, body); r.StatusCode != 403 {
+		t.Fatal("без X-LH", r.StatusCode)
+	}
+	r := req(t, s, "POST", "/api/files/join", "", post, body)
+	var j struct{ Path, Sha256 string }
+	_ = json.NewDecoder(r.Body).Decode(&j)
+	sum := sha256.Sum256([]byte("abcd"))
+	if r.StatusCode != 200 || j.Path != filepath.Join(dir, "hub.l7copy") || j.Sha256 != hex.EncodeToString(sum[:]) {
+		t.Fatal(r.StatusCode, j)
+	}
+	// Второй раз — копия уже есть: ошибка, не перезапись.
+	if r := req(t, s, "POST", "/api/files/join", "", post, body); r.StatusCode != 400 {
+		t.Fatal(r.StatusCode)
 	}
 }
