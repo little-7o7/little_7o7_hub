@@ -27,11 +27,51 @@ var Allowed = map[string]string{
 	"bankuz": "https://bank.uz/currency",
 }
 
+// AllowedGold — источники курса золота (владелец 2026-11-23, для ювелирных магазинов Savo; разбирает хаб —
+// little_7o7/src/lib/gold.ts). Отдельно от валют: их список и расписание не меняются.
+var AllowedGold = map[string]string{
+	"cbu-gold":   "https://cbu.uz/ru/banknotes-coins/gold-bars/prices/",
+	"goldexpert": "https://goldexpert.uz/api/current-gold-prices.json",
+	"diamant":    "https://diamant.uz/api/gold-prices.php",
+	"xau":        "https://api.gold-api.com/price/XAU",
+	"xag":        "https://api.gold-api.com/price/XAG",
+	"xpt":        "https://api.gold-api.com/price/XPT",
+	"swissquote": "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD",
+	"goldnp":     "https://ru.goldnp.com/uzs",
+}
+
 const (
 	// Every — как часто отправлять курсы.
-	Every   = 3 * time.Hour
-	maxBody = 3 << 20
+	Every = 3 * time.Hour
+	// GoldEvery — как часто отправлять курс золота (только днём, GoldTime).
+	GoldEvery = 30 * time.Minute
+	maxBody   = 3 << 20
 )
+
+// GoldTime — сейчас время курса золота: с 7:00 до 21:05 по Ташкенту (UTC+5, перевода часов нет).
+func GoldTime(now time.Time) bool {
+	t := now.UTC().Add(5 * time.Hour)
+	m := t.Hour()*60 + t.Minute()
+	return m >= 7*60 && m <= 21*60+5
+}
+
+// PickGold — как Pick, но для золота.
+func PickGold(fromHub []hub.Source) []hub.Source {
+	if len(fromHub) == 0 {
+		out := make([]hub.Source, 0, len(AllowedGold))
+		for id, url := range AllowedGold {
+			out = append(out, hub.Source{ID: id, URL: url})
+		}
+		return out
+	}
+	var out []hub.Source
+	for _, s := range fromHub {
+		if AllowedGold[s.ID] == s.URL {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 // Pick — источники хаба, которые есть и в своём списке (с тем же адресом). Хаб не ответил — весь свой список.
 func Pick(fromHub []hub.Source) []hub.Source {

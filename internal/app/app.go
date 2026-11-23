@@ -621,6 +621,43 @@ func (a *App) SendStatus(ctx context.Context) {
 	}
 }
 
+// SendGold — курс золота → хаб (для ювелирных магазинов Savo): днём раз в полчаса. Ошибки — в журнал, работу не держат:
+// компьютер молчит — хаб берёт курс сам.
+func (a *App) SendGold(ctx context.Context) {
+	if !rates.GoldTime(a.now()) {
+		return
+	}
+	c, err := a.client()
+	if err != nil {
+		return
+	}
+	srcs, _ := c.GoldSources(ctx)
+	hc := a.HTTP
+	if hc == nil {
+		hc = &http.Client{Timeout: 40 * time.Second}
+	}
+	items, errs := rates.Collect(ctx, hc, rates.PickGold(srcs))
+	es := make([]string, 0, len(errs))
+	for _, e := range errs {
+		es = append(es, e.Error())
+	}
+	if len(items) > 0 {
+		res, err := c.SendGold(ctx, items)
+		if err != nil {
+			a.Logf(true, "Курс золота не ушёл в хаб: %v", err)
+			return
+		}
+		for _, r := range res {
+			if !r.OK {
+				es = append(es, r.Source+": "+r.Error)
+			}
+		}
+	}
+	if len(es) > 0 {
+		a.Logf(true, "Курс золота: %s", strings.Join(es, "; "))
+	}
+}
+
 // SendRates — курсы с узбекских сайтов → хаб.
 func (a *App) SendRates(ctx context.Context) error {
 	c, err := a.client()
@@ -836,8 +873,8 @@ func (a *App) tick(ctx context.Context) {
 }
 
 // Run — работа до выхода: копия при запуске (владелец: «pri vklyuchenii kompyutera, doljen vzyat posledniye
-// izmeneniya»), флаг хаба раз в минуту, файлы проектов раз в ночь, курсы раз в 3 часа, обновление раз в 6 часов.
-// «Сразу после изменений» по флагам проектов выключено (2026-11-17, экономия баз): раскладка — ночью или по кнопке.
+// izmeneniya»), флаг хаба раз в минуту, файлы проектов раз в ночь, курсы раз в 3 часа, курс золота раз в полчаса
+// днём, обновление раз в 6 часов. «Сразу после изменений» по флагам проектов выключено (2026-11-17, экономия баз): раскладка — ночью или по кнопке.
 func (a *App) Run(ctx context.Context) {
 	a.Kick()
 	a.CleanOpen(true) // расшифрованное окном «Файлы» до прошлого выхода (программу закрыли не через «Выход»)
@@ -846,6 +883,8 @@ func (a *App) Run(ctx context.Context) {
 	defer flagT.Stop()
 	rateT := time.NewTicker(rates.Every)
 	defer rateT.Stop()
+	goldT := time.NewTicker(rates.GoldEvery)
+	defer goldT.Stop()
 	updT := time.NewTicker(UpdateEvery)
 	defer updT.Stop()
 	statT := time.NewTicker(StatusEvery)
@@ -879,6 +918,7 @@ func (a *App) Run(ctx context.Context) {
 		case <-first:
 			if a.Paired() {
 				_ = a.SendRates(ctx)
+				a.SendGold(ctx)
 				a.SendStatus(ctx)
 				_ = a.CheckUpdate(ctx)
 				a.goFiles(ctx)
@@ -894,6 +934,10 @@ func (a *App) Run(ctx context.Context) {
 		case <-rateT.C:
 			if a.Paired() {
 				_ = a.SendRates(ctx)
+			}
+		case <-goldT.C:
+			if a.Paired() {
+				a.SendGold(ctx)
 			}
 		case <-statT.C:
 			a.SendStatus(ctx)

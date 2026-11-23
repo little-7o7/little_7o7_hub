@@ -335,6 +335,30 @@ func (c *Client) Sources(ctx context.Context) ([]Source, error) {
 	return r.Sources, readJSON(resp, &r)
 }
 
+// SendGold — ответы источников курса золота (хаб разбирает сам и отправляет в Savo).
+func (c *Client) SendGold(ctx context.Context, items []RateItem) ([]RateResult, error) {
+	resp, err := c.do(ctx, "POST", "/api/pc/gold", map[string]any{"items": items}, true)
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Results []RateResult `json:"results"`
+	}
+	return r.Results, readJSON(resp, &r)
+}
+
+// GoldSources — адреса источников золота из списка хаба.
+func (c *Client) GoldSources(ctx context.Context) ([]Source, error) {
+	resp, err := c.do(ctx, "GET", "/api/pc/gold/sources", nil, false)
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Sources []Source `json:"sources"`
+	}
+	return r.Sources, readJSON(resp, &r)
+}
+
 // Release — последняя версия программы, SHA-256 её файлов и подписи (update.Signed).
 type Release struct {
 	Version string                  `json:"version"`
