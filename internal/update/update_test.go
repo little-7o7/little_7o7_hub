@@ -1,12 +1,107 @@
 package update
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
+
+func sign(t *testing.T, k *ecdsa.PrivateKey, msg string) string {
+	t.Helper()
+	h := sha256.Sum256([]byte(msg))
+	der, err := ecdsa.SignASN1(rand.Reader, k, h[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(der)
+}
+
+func useKey(t *testing.T, k *ecdsa.PublicKey) {
+	old := releaseKey
+	releaseKey = k
+	t.Cleanup(func() { releaseKey = old })
+}
+
+func TestSigned(t *testing.T) {
+	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	useKey(t, &k.PublicKey)
+	sha := strings.Repeat("ab", 32)
+	good := sign(t, k, "littlehub:1.4.0:"+sha)
+	// Хаб может прислать версию с «v» и SHA-256 заглавными — подписано всё равно «1.4.0» и строчными.
+	if !Signed("1.4.0", sha, good) || !Signed("v1.4.0", strings.ToUpper(sha), good) {
+		t.Fatal("верная подпись не прошла")
+	}
+	der, _ := base64.StdEncoding.DecodeString(good)
+	der[len(der)-1] ^= 1
+	bad := map[string][3]string{
+		"подделанная":   {"1.4.0", sha, base64.StdEncoding.EncodeToString(der)},
+		"чужой ключ":    {"1.4.0", sha, sign(t, other, "littlehub:1.4.0:"+sha)},
+		"другая версия": {"1.4.1", sha, good},
+		"другой sha256": {"1.4.0", strings.Repeat("cd", 32), good},
+		"пустая":        {"1.4.0", sha, ""},
+		"не base64":     {"1.4.0", sha, "не подпись"},
+		"другой текст":  {"1.4.0", sha, sign(t, k, "1.4.0:"+sha)},
+	}
+	for name, c := range bad {
+		if Signed(c[0], c[1], c[2]) {
+			t.Error(name, "— прошла")
+		}
+	}
+	// Ключа нет — ничего не проходит.
+	useKey(t, nil)
+	if Signed("1.4.0", sha, good) {
+		t.Fatal("без ключа прошла")
+	}
+}
+
+// Подпись, сделанная openssl (как подпишет скрипт хаба): openssl dgst -sha256 -sign key.pem | base64.
+func TestSignedOpenSSL(t *testing.T) {
+	k, err := parseKey(`-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEP8tStSaDIZZMnx2DEbcpVGkYrNis
+e/scplb20tiEQd8hXZVmhDBJQfY930axUeuEqflsfcBjy+o8Z+idMlV9Mw==
+-----END PUBLIC KEY-----`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	useKey(t, k)
+	sum := sha256.Sum256([]byte("PROGRAM"))
+	sha := hex.EncodeToString(sum[:])
+	sig := "MEYCIQCrOjhXAPSLunvy80v1VzWvwaBdor4d1FrFvsHmy0S6EAIhAKASz8m/gIF7ksQ5z/FS8yXBhnlJuDK5oU7h4+rCLkQ8"
+	if !Signed("1.4.0", sha, sig) {
+		t.Fatal("подпись openssl не прошла")
+	}
+	if Signed("1.4.1", sha, sig) {
+		t.Fatal("чужая версия прошла")
+	}
+}
+
+func TestReleaseKey(t *testing.T) {
+	k, err := parseKey(releaseKeyPEM)
+	if err != nil || k.Curve != elliptic.P256() || releaseKey == nil || !releaseKey.Equal(k) {
+		t.Fatal("встроенный ключ не разобрался:", err)
+	}
+	// Не P-256 и не PEM — не ключ подписи.
+	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	der, _ := x509.MarshalPKIXPublicKey(&p384.PublicKey)
+	if _, err := parseKey(string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))); err == nil {
+		t.Fatal("P-384 принят")
+	}
+	if _, err := parseKey("не ключ"); err == nil {
+		t.Fatal("мусор принят")
+	}
+}
 
 func TestNewer(t *testing.T) {
 	cases := []struct {

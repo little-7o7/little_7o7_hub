@@ -703,6 +703,15 @@ func (a *App) CheckUpdate(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("в выпуске %s нет файла для %s", rel.Version, update.Target())
 	}
+	// Подпись сверяем до скачивания: неподписанный файл не попадает на диск и не запускается даже для --self-test.
+	if !update.Signed(rel.Version, asset.Sha256, asset.Sig) {
+		msg := fmt.Sprintf("обновление %s без верной подписи — не ставлю", rel.Version)
+		a.mu.Lock()
+		a.updateErr = msg
+		a.mu.Unlock()
+		a.Logf(true, "%s", msg)
+		return applyErr{errors.New(msg)}
+	}
 	a.Logf(false, "Новая версия %s — скачиваю", rel.Version)
 	data, err := c.Download(ctx, asset)
 	if err == nil {

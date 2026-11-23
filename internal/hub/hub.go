@@ -335,7 +335,7 @@ func (c *Client) Sources(ctx context.Context) ([]Source, error) {
 	return r.Sources, readJSON(resp, &r)
 }
 
-// Release — последняя версия программы и SHA-256 её файлов.
+// Release — последняя версия программы, SHA-256 её файлов и подписи (update.Signed).
 type Release struct {
 	Version string                  `json:"version"`
 	Assets  map[string]ReleaseAsset `json:"assets"`
@@ -345,6 +345,8 @@ type ReleaseAsset struct {
 	Size   int64  `json:"size"`
 	Sha256 string `json:"sha256"`
 	URL    string `json:"url"`
+	// Sig — base64 подписи ECDSA P-256 (DER) над SHA-256 «littlehub:<версия>:<sha256>».
+	Sig string `json:"sig,omitempty"`
 }
 
 func (c *Client) Latest(ctx context.Context) (Release, error) {

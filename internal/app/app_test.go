@@ -22,6 +22,7 @@ import (
 	"github.com/little-7o7/little_7o7_hub/internal/files"
 	"github.com/little-7o7/little_7o7_hub/internal/hub"
 	"github.com/little-7o7/little_7o7_hub/internal/secret"
+	"github.com/little-7o7/little_7o7_hub/internal/update"
 )
 
 const tok = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
@@ -46,6 +47,9 @@ type fakeHub struct {
 	ask    string
 	latest string
 	checks int
+	// rel — файлы выпуска в /api/pc/version; downloads — сколько раз качали файл программы.
+	rel       map[string]hub.ReleaseAsset
+	downloads int
 	// sync — просьба «Сохранить сейчас на всех»; days — копии хаба прошедших дней; hdrs — заголовки ответа проекта по
 	// «что?запрос» (вместо обычных у копии Sarpo); only — какие проекты спросили (?only=).
 	sync  string
@@ -95,7 +99,13 @@ func (f *fakeHub) server(t *testing.T) *httptest.Server {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.checks++
-		_ = json.NewEncoder(w).Encode(hub.Release{Version: f.latest})
+		_ = json.NewEncoder(w).Encode(hub.Release{Version: f.latest, Assets: f.rel})
+	}))
+	mux.HandleFunc("GET /api/pc/download/", auth(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.downloads++
+		_, _ = w.Write([]byte("PROGRAM"))
 	}))
 	mux.HandleFunc("GET /api/pc/copy", auth(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -634,6 +644,32 @@ func TestUpdateAskFromHub(t *testing.T) {
 	wait(2)
 	if v := a.View(); v.Latest != "9.0.0" || !strings.Contains(v.UpdateErr, "нет файла") || v.Updating {
 		t.Fatal(v.Latest, v.UpdateErr, v.Updating)
+	}
+}
+
+// Новая версия без верной подписи (хаб или GitHub подменили файл и SHA-256) — файл даже не качаем.
+func TestUpdateNeedsSignature(t *testing.T) {
+	now := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+	s := sha256.Sum256([]byte("PROGRAM"))
+	// Пустая и подпись чужим ключом (openssl, проверочный ключ из update_test.go).
+	for _, sig := range []string{"", "MEUCIDKDFuc1HX034evjYlzGKRKx/ZSJyCKI+7LIW3YO0MYsAiEAoo9mPXGbzRG2sGbTQFakNybLYCVbK/k22O7TDlt3OqQ="} {
+		f := &fakeHub{copy: sample(t), day: "2026-11-08", version: "1", sources: `{}`, latest: "9.0.0",
+			rel: map[string]hub.ReleaseAsset{update.Target(): {Size: 7, Sha256: hex.EncodeToString(s[:]), URL: "/api/pc/download/x", Sig: sig}}}
+		a, _ := newApp(t, f, &now)
+		a.Exe = filepath.Join(t.TempDir(), "LittleHub.exe")
+		var ae applyErr
+		if err := a.CheckUpdate(context.Background()); !errors.As(err, &ae) {
+			t.Fatal(err)
+		}
+		f.mu.Lock()
+		downloads := f.downloads
+		f.mu.Unlock()
+		if downloads != 0 || !hasLog(a, "обновление 9.0.0 без верной подписи — не ставлю") || a.View().UpdateErr != "обновление 9.0.0 без верной подписи — не ставлю" {
+			t.Fatal(downloads, a.View().UpdateErr, a.View().Log)
+		}
+		if _, err := os.Stat(a.Exe + ".new"); !os.IsNotExist(err) {
+			t.Fatal("файл записан")
+		}
 	}
 }
 

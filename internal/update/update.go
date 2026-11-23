@@ -1,14 +1,21 @@
-// Package update — программа обновляет себя сама (план pc-backup-1, решение 5). Хаб говорит последнюю версию и
-// SHA-256 файла (из SHA256SUMS выпуска GitHub, little_7o7/src/lib/pc-release.ts); программа качает файл через хаб,
-// сверяет размер и SHA-256, запускает новый файл с --self-test и только потом меняет себя. Старый файл остаётся
-// рядом (.old), пока новая версия не запустилась, — не запустилась, возвращаем старую.
+// Package update — программа обновляет себя сама (план pc-backup-1, решение 5). Хаб говорит последнюю версию,
+// SHA-256 файла (из SHA256SUMS выпуска GitHub, little_7o7/src/lib/pc-release.ts) и подпись; программа сверяет
+// подпись, качает файл через хаб, сверяет размер и SHA-256, запускает новый файл с --self-test и только потом меняет
+// себя. Старый файл остаётся рядом (.old), пока новая версия не запустилась, — не запустилась, возвращаем старую.
 //
-// Подписи ed25519 пока нет (ключ подписи пришлось бы хранить в секретах GitHub Actions — отложено): файл приходит
-// из закрытого репозитория через хаб по https, и SHA-256 сверяется с выпуском.
+// Подпись — ECDSA P-256 (DER, base64) над SHA-256 текста «littlehub:<версия>:<sha256>»: закрытый ключ — только на
+// Mac владельца, выпуск подписывает скрипт хаба после сборки. Без верной подписи обновление не ставится — даже если
+// хаб или GitHub подменили и файл, и его SHA-256.
 package update
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -24,6 +31,41 @@ func Target() string { return runtime.GOOS + "-" + runtime.GOARCH }
 
 // SelfTestLine — что печатает --self-test исправная программа.
 const SelfTestLine = "littlehub-ok"
+
+// releaseKeyPEM — открытый ключ подписи выпусков (не секрет).
+const releaseKeyPEM = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECQ3AuwfAnb6u5XdRK9OceqDo9fkq
+jpQM+Q3Ec2TyJMebzu0Ip3fiza0ZngI03kG7/gy1K49VaskW5E33uIfpEw==
+-----END PUBLIC KEY-----`
+
+// releaseKey — ключ, которым сверяем подпись (тесты подставляют свой). Не разобрался — nil: обновления не ставятся.
+var releaseKey, _ = parseKey(releaseKeyPEM)
+
+func parseKey(s string) (*ecdsa.PublicKey, error) {
+	b, _ := pem.Decode([]byte(s))
+	if b == nil || b.Type != "PUBLIC KEY" {
+		return nil, errors.New("ключ подписи — не PEM PUBLIC KEY")
+	}
+	k, err := x509.ParsePKIXPublicKey(b.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	ek, ok := k.(*ecdsa.PublicKey)
+	if !ok || ek.Curve != elliptic.P256() {
+		return nil, errors.New("ключ подписи — не ECDSA P-256")
+	}
+	return ek, nil
+}
+
+// Signed — подпись sig (base64 DER) выпуска version с файлом sha (hex) верна.
+func Signed(version, sha, sig string) bool {
+	der, err := base64.StdEncoding.DecodeString(sig)
+	if releaseKey == nil || err != nil || len(der) == 0 {
+		return false
+	}
+	h := sha256.Sum256([]byte("littlehub:" + strings.TrimPrefix(version, "v") + ":" + strings.ToLower(sha)))
+	return ecdsa.VerifyASN1(releaseKey, h[:], der)
+}
 
 func parts(v string) ([3]int, bool) {
 	var out [3]int
